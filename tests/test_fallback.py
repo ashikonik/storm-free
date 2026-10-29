@@ -337,6 +337,121 @@ def test_usage_summary_reports_tokens_and_calls() -> None:
     assert summary["groq/model-a"]["calls"] == 1
 
 
+class CountingLM(FakeLM):
+    """A model that counts tokens the way upstream's ``LitellmModel`` does.
+
+    Upstream accumulates ``prompt_tokens`` and ``completion_tokens`` on the
+    model itself and resets them only when ``get_usage_and_reset`` is
+    called.  The wrapper never sees the response, so this is the only
+    place the usage survives.
+    """
+
+    def __init__(self, model: str) -> None:
+        super().__init__(model)
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def __call__(self, prompt=None, messages=None, **kwargs):
+        self.calls += 1
+        self.prompt_tokens += 10
+        self.completion_tokens += 5
+        return [f"response from {self.model}"]
+
+
+def test_token_usage_is_read_from_the_inner_model() -> None:
+    """The run log must show the tokens the run actually cost.
+
+    The wrapper's own tracker was always empty, because the inner model
+    keeps the counters and the wrapper never saw the response.  A live run
+    reported ``0 prompt + 0 completion`` for every model.
+    """
+    lm = CountingLM("groq/model-a")
+    chain = FallbackLM([lm])
+
+    chain("hello")
+
+    summary = chain.usage_summary()
+    assert summary["groq/model-a"]["prompt_tokens"] == 10
+    assert summary["groq/model-a"]["completion_tokens"] == 5
+    assert summary["groq/model-a"]["total_tokens"] == 15
+
+
+def test_the_cumulative_total_is_not_counted_twice() -> None:
+    """Two calls must cost two calls' worth of tokens, not four.
+
+    The inner model's counters accumulate, so the wrapper has to subtract
+    what it has already seen or every call would bill the running total.
+    """
+    lm = CountingLM("groq/model-a")
+    chain = FallbackLM([lm])
+
+    chain("hello")
+    chain("hello")
+
+    summary = chain.usage_summary()
+    assert summary["groq/model-a"]["prompt_tokens"] == 20
+    assert summary["groq/model-a"]["completion_tokens"] == 10
+
+
+def test_usage_is_billed_to_the_provider_that_served() -> None:
+    """A failover must not bill the backup for the primary's tokens."""
+    primary = CountingLM("groq/model-a")
+    backup = CountingLM("gemini/model-b")
+    chain = FallbackLM([primary, backup])
+
+    chain("hello")
+    chain("hello")
+
+    summary = chain.usage_summary()
+    assert summary["groq/model-a"]["prompt_tokens"] == 20
+    # The backup never served a call, so it must not appear in the summary
+    # at all rather than appearing with a share of the primary's tokens.
+    assert "gemini/model-b" not in summary
+
+
+def test_the_summary_survives_the_usage_reset() -> None:
+    """The summary must still show the tokens after upstream resets them.
+
+    Upstream collects and resets the usage during ``post_run``, and the run
+    log is written after that.  A summary built on the resettable tracker
+    therefore read zero -- which is exactly what a live run reported.
+    """
+    lm = CountingLM("groq/model-a")
+    chain = FallbackLM([lm])
+
+    chain("hello")
+
+    # This is what upstream's ``collect_and_reset_lm_usage`` does.
+    chain.get_usage_and_reset()
+
+    summary = chain.usage_summary()
+    assert summary["groq/model-a"]["prompt_tokens"] == 10
+    assert summary["groq/model-a"]["completion_tokens"] == 5
+
+
+def test_a_failover_bills_only_the_provider_that_served() -> None:
+    """The backup's tokens must land on the backup, not on the primary."""
+
+    class FailingCountingLM(CountingLM):
+        """A counting model that always fails."""
+
+        def __call__(self, prompt=None, messages=None, **kwargs):
+            self.calls += 1
+            raise RateLimitError("slow down", 429)
+
+    primary = FailingCountingLM("groq/model-a")
+    backup = CountingLM("gemini/model-b")
+    chain = FallbackLM([primary, backup])
+
+    chain("hello")
+    chain("hello")
+
+    summary = chain.usage_summary()
+    assert summary["gemini/model-b"]["prompt_tokens"] == 20
+    assert summary["gemini/model-b"]["completion_tokens"] == 10
+    assert "groq/model-a" not in summary
+
+
 # -- LiteLLM response parsing ------------------------------------------------
 
 

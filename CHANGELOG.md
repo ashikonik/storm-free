@@ -45,6 +45,11 @@ that made the project hard to start with and hard to trust.
   maintains, and each stage's elapsed time is recorded. The log also
   records which provider *served* each request, not only which ones
   failed — previously a successful run left no sign of who had answered.
+  The token counts needed a second fix of their own: the tracker is reset
+  by upstream when it collects the usage, which happens before the log is
+  written, so the summary read zero for every model. The running totals
+  now live in a record that reset cannot reach. A live run reports
+  14,743 tokens across three providers.
 - **`llm_call_history.jsonl` was always empty.** The history was appended
   to the inner model, but upstream reads the *wrapper's* list. The
   project's own flagship artifact was zero bytes. Both lists now receive

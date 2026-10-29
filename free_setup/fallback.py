@@ -322,6 +322,30 @@ def _response_to_dict(response: Any) -> dict[str, Any]:
     return dict(response)
 
 
+def _usage_from_inner_model(lm: Any) -> dict[str, Any]:
+    """Read the token usage the inner model recorded for the last call.
+
+    Upstream's ``LitellmModel`` accumulates ``prompt_tokens`` and
+    ``completion_tokens`` itself, and resets them only when
+    ``get_usage_and_reset()`` is called.  The wrapper is the object STORM
+    holds, so it never sees that response -- but the counters are still on
+    the inner model, and they are the only place the usage survives.
+
+    The counters accumulate, so the value returned here is the *total* the
+    inner model has seen, not the cost of the last call.  The caller's
+    tracker bills a delta, so that is what it subtracts.
+    """
+    prompt = getattr(lm, "prompt_tokens", None)
+    completion = getattr(lm, "completion_tokens", None)
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        return {}
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "_cumulative": True,
+    }
+
+
 def _choice_text(choice: Any) -> str:
     """Extract the assistant text from one completion choice.
 
@@ -621,6 +645,12 @@ class FallbackLM:
         self._tracker = CostTracker()
         self._call_counts: dict[str, int] = {}
         self._failure_counts: dict[str, int] = {}
+        # The last cumulative usage total seen for each model, so that the
+        # cost of a call can be told apart from the running total.
+        self._usage_seen: dict[str, tuple[int, int]] = {}
+        # The running totals, kept apart from ``_tracker`` so that they
+        # survive the reset upstream performs when it collects the usage.
+        self._lifetime_usage: dict[str, dict[str, int]] = {}
 
         limits = rate_limits or {}
         daily = daily_limits or {}
@@ -664,20 +694,47 @@ class FallbackLM:
         ``log_usage`` on the wrapper *after* ``__call__`` returns, and by then
         another thread may have failed over, so attributing the tokens to
         whichever provider is currently active would bill the wrong one.
+
+        Two shapes of usage arrive here.  The uncached LiteLLM path hands
+        over the response for one call, and its figures are the cost of
+        that call.  The plain path hands over the inner model's *cumulative*
+        counters, which only ever grow, so the cost of this call is the
+        difference since the last time that model was recorded.
         """
-        usage = (response or {}).get("usage") or {}
+        usage = (response or {}).get("usage")
         if not isinstance(usage, dict):
             return
         prompt = int(usage.get("prompt_tokens", 0) or 0)
         completion = int(usage.get("completion_tokens", 0) or 0)
-        record = CostRecord(
-            model=model,
-            provider=model.split("/", 1)[0],
-            prompt_tokens=prompt,
-            completion_tokens=completion,
-        )
+
         with self._lock:
+            if usage.get("_cumulative"):
+                previous = self._usage_seen.get(model, (0, 0))
+                # The counters can be reset by the inner model, in which
+                # case the new total is smaller than the last one seen and
+                # the whole total is this call's cost.
+                prompt = max(prompt - previous[0], 0)
+                completion = max(completion - previous[1], 0)
+                self._usage_seen[model] = (
+                    int(usage.get("prompt_tokens", 0) or 0),
+                    int(usage.get("completion_tokens", 0) or 0),
+                )
+            record = CostRecord(
+                model=model,
+                provider=model.split("/", 1)[0],
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+            )
             self._tracker = self._tracker.add(record)
+            # The tracker is resettable, and upstream resets it during
+            # ``post_run``.  The run log is written after that, so the
+            # totals it needs have to live somewhere the reset cannot
+            # reach.
+            total = self._lifetime_usage.setdefault(
+                model, {"prompt_tokens": 0, "completion_tokens": 0}
+            )
+            total["prompt_tokens"] += prompt
+            total["completion_tokens"] += completion
 
     def log_usage(self, response: dict[str, Any]) -> None:
         """Record token usage from a raw provider response.
@@ -706,15 +763,21 @@ class FallbackLM:
 
         Upstream's ``Engine.summary()`` only prints its report and returns
         ``None``, so the run log cannot use it.  This accessor exposes the
-        same information from the tracker the wrapper already maintains, so
-        a run log can record what each provider actually cost.
+        same information, so a run log can record what each provider
+        actually cost.
+
+        The totals come from a record kept apart from the resettable
+        tracker, because upstream collects and resets the usage during
+        ``post_run`` -- and the run log is written after that.
 
         The returned mapping is keyed by model id and holds
         ``prompt_tokens``, ``completion_tokens``, ``total_tokens`` and
         ``calls``.
         """
         with self._lock:
-            by_model = self._tracker.by_model()
+            by_model = {
+                model: dict(tokens) for model, tokens in self._lifetime_usage.items()
+            }
             calls = dict(self._call_counts)
         summary: dict[str, dict[str, int]] = {}
         for model, tokens in by_model.items():
@@ -933,8 +996,9 @@ class FallbackLM:
                 outputs = lm(prompt=prompt, messages=messages, **kwargs)
             except Exception as exc:
                 raise _normalise_greedy_sampling(exc) from None
-            self._record_history(lm, prompt, messages, outputs, {})
-            return outputs, {}
+            usage = _usage_from_inner_model(lm)
+            self._record_history(lm, prompt, messages, outputs, {"usage": usage})
+            return outputs, {"usage": usage}
         return self._invoke_uncached(lm, prompt, messages, kwargs)
 
     @staticmethod
