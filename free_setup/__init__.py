@@ -102,6 +102,7 @@ from .providers import (
     split_model,
 )
 from .secrets import load_secrets
+from .topic import InvalidTopicError, validate_topic
 
 # ``runner`` imports the upstream ``knowledge_storm`` package at module
 # level, and the clone is gitignored.  Importing it lazily keeps
@@ -157,6 +158,7 @@ __all__ = [
     "CostTracker",
     "FallbackLM",
     "FreeConfig",
+    "InvalidTopicError",
     "ProviderSpec",
     "RunnerBuildError",
     "StageConfig",
@@ -181,4 +183,5 @@ __all__ = [
     "require_upstream",
     "split_model",
     "upstream_path",
+    "validate_topic",
 ]

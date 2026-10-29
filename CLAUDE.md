@@ -50,6 +50,7 @@ storm-free/
 │   ├── doctor.py        Provider/retriever probing
 │   ├── run_log.py       Per-run log: provider decisions, tokens, timings
 │   ├── secrets.py       Loads secrets.toml into the environment
+│   ├── topic.py         Validates the topic against a path escape
 │   ├── outline_patch.py Runtime patch for upstream's outline parser
 │   └── progress.py      BaseCallbackHandler -> terminal output
 └── storm/               Upstream clone (read-only in practice)
@@ -71,6 +72,7 @@ drives the upstream 4-module pipeline -> results land in `outputs/<topic>/`.
 | `free_setup/doctor.py` | `probe_provider()`; `probe_retriever()`; `render_results()` |
 | `free_setup/run_log.py` | `RunLog`; `build_run_log()`; `attach_log_capture()` |
 | `free_setup/secrets.py` | `load_secrets()` — reads `secrets.toml` into the environment |
+| `free_setup/topic.py` | `validate_topic()` — keeps the output directory inside `--output-dir` |
 | `free_setup/outline_patch.py` | `apply_outline_patch()` — replaces upstream's broken outline parser |
 | `free_setup/progress.py` | `CLICallbackHandler` |
 | `run_storm_free.py` | CLI: `--doctor`, `--list-providers`, `--dry-run`, pipeline run |

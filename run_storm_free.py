@@ -58,6 +58,7 @@ from free_setup.run_log import (
     build_run_log,
     detach_log_capture,
 )
+from free_setup.topic import InvalidTopicError, validate_topic
 
 logger = logging.getLogger("storm_free")
 
@@ -272,6 +273,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             "error: a topic is required (or use --doctor / --list-providers)",
             file=sys.stderr,
         )
+        return 2
+
+    try:
+        validate_topic(args.topic)
+    except InvalidTopicError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
     try:
