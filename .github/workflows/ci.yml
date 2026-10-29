@@ -119,13 +119,22 @@ jobs:
         run: |
           set -euo pipefail
           ./venv/bin/python run_storm_free.py --help > /dev/null
-          ./venv/bin/python run_storm_free.py --list-providers | grep -q groq
+          # The output is captured to a file rather than piped into grep:
+          # `grep -q` closes the pipe as soon as it matches, the CLI gets
+          # SIGPIPE, and `pipefail` turns that into a failure.
+          ./venv/bin/python run_storm_free.py --list-providers > providers.txt
+          grep -q groq providers.txt
           echo "The CLI starts and lists the providers."
 
       - name: The CLI resolves a plan without spending anything
         run: |
           set -euo pipefail
-          ./venv/bin/python run_storm_free.py "a test topic" --dry-run | grep -q "Dry run"
+          # The output is captured to a file rather than piped into grep:
+          # `grep -q` closes the pipe as soon as it matches, the CLI gets
+          # SIGPIPE, and `pipefail` turns that into a failure.
+          ./venv/bin/python run_storm_free.py "a test topic" --dry-run > plan.txt
+          grep -q "Dry run" plan.txt
+          grep -q "Resolved provider chains" plan.txt
           echo "The CLI resolves a plan."
 
       - name: Run the CLI test suite

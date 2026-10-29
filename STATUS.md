@@ -46,7 +46,7 @@ are the detail behind the summary here.
 - [x] **LLM call history** — written to the wrapper's history, which is the
       list upstream collects, so `llm_call_history.jsonl` is no longer empty.
 - [x] **Progress tracking** — this file, plus `logs/runs/` (gitignored).
-- [x] **Test suite** — 316 tests, no network access required.
+- [x] **Test suite** — 321 tests, no network access required.
 - [x] **Formatting and typing** — `ruff format` and `ruff check` are the
       project standard; `mypy.ini` configures the type checker.
 - [x] **CI/CD pipeline** — GitHub Actions on every push and pull request:
@@ -95,6 +95,14 @@ guarantee is what the project exists for:
 Two further bugs were found while writing the release: `--model` silently
 discarded the whole fallback chain, and a topic of `..` wrote the article
 outside the output directory.
+
+A third was found by CI itself, on a machine with no API keys configured:
+`--dry-run` dropped every provider that had no key, so it failed with
+"No available provider" before it could print anything. That is exactly
+what a dry run is for — showing someone who has not set a key up yet
+what *would* happen — so the key requirement is now lifted for a dry
+run only. A real run still fails with the message telling the user which
+key to add.
 
 ## Verified end to end
 

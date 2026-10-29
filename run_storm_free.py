@@ -327,6 +327,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             or str(config.get_default("retriever", "duckduckgo")),
             only_providers=args.providers,
             use_cache=args.use_cache,
+            # A dry run resolves the plan rather than running it, so it must
+            # not need an API key: the point of it is to show what would
+            # happen, which is exactly what someone without a key wants to
+            # know.
+            require_keys=not args.dry_run,
             **_overrides(args),
         )
     except Exception as exc:

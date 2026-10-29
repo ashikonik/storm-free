@@ -72,6 +72,17 @@ that made the project hard to start with and hard to trust.
   It also rebuilt the virtual environment on every run, making
   `INSTALL_UI=1 ./setup.sh` a 2.5 GB reinstall. It now reuses an existing
   environment and exits non-zero when the clone does not import.
+- **`--dry-run` failed on a machine with no API keys.** The chain builder
+  dropped every provider without a configured key, so the dry run died
+  with "No available provider" before it could print anything — the
+  opposite of what it is for. A dry run now resolves the plan with the
+  key requirement lifted; a real run still fails with the message that
+  tells the user which key to add.
+- **The CLI smoke test failed on a broken pipe.** `grep -q` closes the
+  pipe as soon as it matches, so the CLI received `SIGPIPE` while it was
+  still writing its output; under `set -euo pipefail` that turned a
+  successful run into a failed step. The output is now captured to a
+  file and the file is grepped.
 
 ### Changed
 
