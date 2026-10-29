@@ -49,10 +49,14 @@ are the detail behind the summary here.
 
 ## Verified end to end
 
-- [x] **Full article run** — produced a five-section article with 73
-      citations and 10 references (`outputs/history_of_the_printing_press/`).
+- [x] **Full article run** — produced a complete 32 KB article with 22
+      sections, 67 inline citation markers and 17 distinct cited sources
+      (`outputs/history_of_the_printing_press/`). The run is spread across
+      three providers and the article ends on a full sentence.
 - [x] **Fallback in production** — Gemini exhausted its daily quota
-      mid-run and Groq took over; Mistral served the polish stage.
+      mid-run; Groq took over the article stage and Mistral served both the
+      article body and the polish stage. The token summary shows all three
+      models contributing to one article.
 - [x] **Fallback on a broken primary** — a deliberately rate-limited
       primary advanced the chain three times, exactly as designed.
 - [x] **Doctor** — 23 probes in ~23 s (was ~20 minutes before the timeout
@@ -65,11 +69,9 @@ are the detail behind the summary here.
 - [ ] **More provider keys** — 19 of the 22 registered providers still have
       no key, so only groq, gemini and mistral are exercised in practice.
       The three that are configured but broken are listed under *Blocked*.
-- [ ] **Nightly probe result** — the first probe with keys is still running;
-      check the job summary for the current state of each provider.
-- [ ] **Re-verify the full run** — the article pipeline was last verified end
-      to end with the old Gemini model ids. The chains have been updated to
-      the ids that answer today, but a fresh full run is still owed.
+- [ ] **Gemini's daily quota** — 20 requests/day/model. A full run needs
+      60–80 calls, so Gemini alone can never finish a run; that is what
+      the fallback chain is for.
 
 ## Blocked
 

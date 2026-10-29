@@ -73,6 +73,11 @@ Cerebras, SambaNova, Together and OpenRouter are registered too, but note that
 Cerebras now requires a verified payment method and the other three had their
 configured keys rejected by the API (see `STATUS.md` for the details).
 
+Free tiers retire models without warning — Google stopped serving
+`gemini-2.5-flash` to new accounts in October 2026. The nightly workflow
+probes the configured providers every day precisely to catch that, and
+`STATUS.md` records each retirement and the replacement that answers.
+
 ## Commands
 
 ```bash
