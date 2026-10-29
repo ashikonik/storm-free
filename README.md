@@ -99,8 +99,8 @@ probes the configured providers every day precisely to catch that, and
 # Restrict to one provider
 ./venv/bin/python run_storm_free.py "topic" --provider groq
 
-# Override the model for every stage
-./venv/bin/python run_storm_free.py "topic" --model groq/openai/gpt-oss-120b
+# Override the model for every stage (the fallback chain is kept)
+./venv/bin/python run_storm_free.py "topic" --model groq/qwen/qwen3.8-27b
 
 # Write a per-run log (default: logs/runs/<date>-<topic>.log)
 ./venv/bin/python run_storm_free.py "topic" --log-file /tmp/run.log
@@ -113,9 +113,105 @@ Any stage flag you omit reuses the cached result from a previous run, so you
 can research once and write later without paying twice.
 
 Each run writes a log recording the command, the resolved provider chains,
-every fallback decision and the token summary. The logs are gitignored;
-[`STATUS.md`](STATUS.md) is the committed record of what has been achieved
-and what is still open.
+every provider decision, the token usage and the per-stage timings. The logs
+are gitignored; [`STATUS.md`](STATUS.md) is the committed record of what has
+been achieved and what is still open.
+
+### All options
+
+Run `./venv/bin/python run_storm_free.py --help` for the authoritative list.
+
+**Run control**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `topic` | — | The topic to research and write about. Required, unless `--doctor` or `--list-providers` is used. |
+| `--dry-run` | off | Resolve and print the plan without making any API calls. |
+| `--doctor` | off | Probe every provider and the retriever, then exit. |
+| `--list-providers` | off | Show every known provider and its free models, then exit. |
+| `--verbose` | off | Print detailed progress to stderr. |
+
+**Stages** — any flag you omit reuses the cached result of a previous run.
+
+| Flag | What it does |
+|---|---|
+| `--do-research` | Run the research stage. |
+| `--do-generate-outline` | Run the outline stage. |
+| `--do-generate-article` | Run the article stage. |
+| `--do-polish-article` | Run the polish stage. |
+
+**Model and provider selection**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--provider` | all | Restrict the fallback chain to this provider. Repeatable. |
+| `--model` | from config | Override the *primary* model for every stage. The configured fallback chain is kept. |
+| `--config` | `free_config.toml` | Path to the TOML configuration file. |
+| `--secrets` | `secrets.toml` | Path to the TOML file with API keys. |
+
+**Retrieval and pipeline size**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--retriever` | `duckduckgo` | Search backend. Only `duckduckgo` is available. |
+| `--max-conv-turn` | 2 | Questions per simulated conversation. |
+| `--max-perspective` | 2 | Viewpoints to explore. |
+| `--search-top-k` | 3 | Search results per query. |
+| `--retrieve-top-k` | 5 | References per outline section. |
+| `--max-thread-num` | 2 | Concurrent requests. Lower it if a provider rate-limits. |
+
+**Output and logging**
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--output-dir` | `outputs` | Directory for generated articles. |
+| `--log-file` | `logs/runs/<date>-<topic>.log` | Write the per-run log to this path. |
+| `--no-log` | off | Do not write a per-run log. |
+| `--use-cache` | off | Enable response caching. Off by default: upstream's cache is keyed on the request alone, so it could serve one provider's answer for another's request. |
+
+## Troubleshooting
+
+**"Every provider in the fallback chain has used up its daily request budget."**
+The daily quota, not the rate limit, is what usually stops a run. Gemini's free
+plan allows 20 requests per day per model, and a full run makes roughly 60–80
+model calls, so one model can never finish a run on its own. Either add a
+second provider's key, or run the stages in separate sittings:
+
+```bash
+./venv/bin/python run_storm_free.py "topic" --do-research --do-generate-outline
+# ... wait for the quota to reset (midnight Pacific time for Gemini) ...
+./venv/bin/python run_storm_free.py "topic" --do-generate-article --do-polish-article
+```
+
+The second command reuses the cached research, so you do not pay for it twice.
+
+**"The upstream STORM clone is missing."**
+The upstream clone lives in `storm/` and is gitignored, so a fresh checkout does
+not have it. Run `./setup.sh` from the project root.
+
+**A provider returns `AuthenticationError` or `PermissionDeniedError`.**
+The key is wrong, revoked or out of credit. The chain moves on to the next
+provider automatically — the run continues unless every provider in the chain
+has failed. Check the key in `secrets.toml`, then confirm with `--doctor`.
+
+**The article comes back cut off mid-sentence.**
+The token budget for the stage was too small for a whole section. The writing
+stages are given at least 1400 tokens, and reasoning models four times that,
+but a provider that ignores `max_tokens` can still truncate. Try a different
+model with `--model`.
+
+**Everything is slow, or the run keeps retrying.**
+Lower `--max-thread-num`. Free tiers are rate limited, and STORM drives the
+pipeline from a thread pool; fewer threads means fewer simultaneous requests
+and fewer rate-limit responses.
+
+**A run failed — what happened?**
+Read the run log. It records the command, the resolved chains, every provider
+decision with the reason, the token usage and the per-stage timings:
+
+```bash
+tail -50 logs/runs/$(ls -t logs/runs | head -1)
+```
 
 ## Configuration
 
@@ -139,15 +235,17 @@ asks for 4,000 output tokens.
 
 ## Continuous integration
 
-Two GitHub Actions workflows run on every push:
+Two GitHub Actions workflows:
 
-- **`ci.yml`** — lint (`ruff check`), format check (`ruff format --check`),
-  the test suite, a type check (`mypy`), and a secret scan that fails the
-  build if a key-shaped string reaches a committed file.
-- **`nightly.yml`** — probes every configured provider once a day and writes
-  the result to the job summary. This is what catches a provider retiring a
-  model id before a user finds out the hard way. It skips itself cleanly
-  when no provider keys are configured in the repository secrets.
+- **`ci.yml`** — runs on every push and pull request: lint (`ruff check`),
+  format check (`ruff format --check`), the test suite, a type check (`mypy`),
+  and a secret scan that fails the build if a key-shaped string reaches a
+  committed file.
+- **`nightly.yml`** — runs once a day (and on demand) and probes every
+  configured provider, writing the result to the job summary. This is what
+  catches a provider retiring a model id before a user finds out the hard
+  way. It skips itself cleanly when no provider keys are configured in the
+  repository secrets.
 
 ## Streamlit UI (optional)
 
@@ -177,11 +275,31 @@ Articles are written to `outputs/<topic>/`:
 STORM expects, so it drops into any of the five language-model slots without
 patching upstream code.
 
-Only **transient** failures move on to the next provider: rate limits (429),
-connection errors and 5xx responses. Authentication errors (401/403) and bad
-requests (400) raise immediately, because a wrong API key is a configuration
-bug that should be reported rather than hidden by burning every provider in the
-chain.
+The chain distinguishes three kinds of failure:
+
+- **Transient** — rate limits (429), connection errors and 5xx responses.
+  The chain waits for the provider's own retry hint and then moves on.
+- **Provider-scoped** — authentication errors (401/403) and retired model ids
+  (404). These condemn the provider, not the request, so the chain moves on to
+  the next one. A single provider with a broken key cannot sink a run that has
+  healthy providers queued behind it.
+- **Request-scoped** — bad requests (400), context-window overflows and content
+  policy refusals. Retrying these elsewhere will not help, so they raise
+  immediately rather than burning every provider in the chain.
+
+Once a provider succeeds it stays sticky, so a healthy provider carries the
+load instead of every call round-robining the chain.
+
+## Upstream pin
+
+`setup.sh` and both CI workflows clone `stanford-oval/storm` at a pinned
+commit. Upstream can change its API without warning, and its
+`requirements.txt` is used unmodified, so tracking the default branch would
+let an upstream change break this project at any moment.
+
+To move the pin, change `STORM_COMMIT` in `setup.sh` and the matching
+`git -C storm checkout` lines in `.github/workflows/ci.yml` and
+`.github/workflows/nightly.yml`, then re-run the test suite.
 
 ## Using with Claude Code
 

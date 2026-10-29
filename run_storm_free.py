@@ -41,13 +41,13 @@ from free_setup import (
     RETRIEVERS,
     STAGES,
     ConfigError,
-    build_runner,
+    UpstreamMissingError,
     describe,
-    describe_chains,
     discover_available,
     list_providers,
     load_config,
     load_secrets,
+    require_upstream,
 )
 from free_setup.doctor import render_results, run_doctor
 from free_setup.progress import CLICallbackHandler
@@ -309,6 +309,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     _load_secrets(Path(args.secrets))
 
     try:
+        # Imported here rather than at the top of the module: they pull in
+        # the upstream STORM package, which the clone is needed for.
+        from free_setup import build_runner, describe_chains
+
         runner, lm_configs = build_runner(
             config,
             args.output_dir,
@@ -498,6 +502,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.doctor:
         _load_secrets(Path(args.secrets))
         return cmd_doctor(args)
+
+    # Everything below this point needs the upstream STORM clone.  Check for
+    # it up front so a fresh clone reports what to do instead of failing
+    # with a bare ModuleNotFoundError pointing at an internal file.
+    try:
+        require_upstream()
+    except UpstreamMissingError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     return cmd_run(args)
 
 

@@ -12,7 +12,20 @@ import sys
 import time
 from typing import Any, TextIO
 
-from knowledge_storm.storm_wiki.modules.callback import BaseCallbackHandler
+try:
+    from knowledge_storm.storm_wiki.modules.callback import BaseCallbackHandler
+except ImportError:  # pragma: no cover - only hit without the upstream clone
+    # The upstream clone is gitignored, so a fresh checkout does not have it.
+    # Importing this module must not fail, or the CLI cannot report the
+    # missing clone with instructions -- it would die with a bare
+    # ModuleNotFoundError instead.  The base class is only a marker with
+    # hook methods that the pipeline calls, so a stand-in works.
+    class BaseCallbackHandler:  # type: ignore[no-redef]
+        """Stand-in for upstream's callback base class.
+
+        Only used when the upstream clone is absent, which is exactly the
+        situation in which the handler cannot be used anyway.
+        """
 
 
 class CLICallbackHandler(BaseCallbackHandler):
