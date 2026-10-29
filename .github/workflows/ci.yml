@@ -50,7 +50,7 @@ jobs:
           git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -92,7 +92,7 @@ jobs:
           git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -147,7 +147,7 @@ jobs:
           git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
