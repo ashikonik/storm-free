@@ -1,0 +1,97 @@
+# STORM free-tier configuration.
+#
+# Every stage names a primary model plus an ordered fallback chain.  STORM
+# tries the primary; if it hits a rate limit or a transient server error, it
+# moves to the next entry automatically.
+#
+# Model ids are "<provider>/<model>".  A provider whose API key is not set is
+# skipped automatically, so this file works with any subset of keys present.
+#
+# Providers with free tiers and no credit card:
+#   groq        https://console.groq.com/keys
+#   gemini      https://aistudio.google.com/apikey
+#   mistral     https://console.mistral.ai/api-keys
+#   openrouter  https://openrouter.ai/keys
+#   nvidia_nim  https://build.nvidia.com
+#
+# -- Why so many entries in each chain? ---------------------------------------
+#
+# The binding constraint on a free tier is the *daily* quota, not the
+# per-minute one.  Gemini's free plan allows 20 requests per day per model,
+# and a full STORM run makes roughly 60-80 model calls, so one model cannot
+# finish a run on its own.  The fix is to list several models: each has its
+# own quota pool, and the chain walks through them as they run out.
+#
+# Add as many providers as you have keys for.  The more keys, the longer a
+# run can go before any quota is exhausted.  There is no local-model fallback
+# here: every provider is a hosted API, and a run with no usable key fails
+# with a message saying which keys to add.
+
+[defaults]
+retriever = "duckduckgo"      # needs no API key
+max_conv_turn = 2             # questions per simulated conversation
+max_perspective = 2           # viewpoints explored
+max_search_queries_per_turn = 2
+search_top_k = 3              # search results per query
+retrieve_top_k = 5            # references per outline section
+max_thread_num = 2            # concurrent requests; free tiers are rate limited
+
+# -- Stage 1: pre-writing (research + outline) -------------------------------
+# The simulated conversation is cheap and repetitive, so it goes to the
+# fastest provider; the question asker is the most creative step, so it gets a
+# different model entirely.  That also gives the pipeline genuine model
+# diversity rather than one model answering everything.
+#
+# Every model listed here was probed live on 2026-10-29 and returned real
+# text.  Models that failed their probe are deliberately absent -- see
+# STATUS.md for what was removed and why.
+
+[stages.conv_simulator]
+model = "gemini/gemini-2.5-flash-lite"
+fallbacks = [
+    "groq/qwen/qwen3.8-27b",
+    "mistral/ministral-3b-latest",
+]
+
+[stages.question_asker]
+model = "gemini/gemini-2.5-flash"
+fallbacks = [
+    "groq/qwen/qwen3.8-27b",
+    "mistral/ministral-3b-latest",
+]
+
+[stages.outline_gen]
+model = "gemini/gemini-2.5-flash-lite"
+fallbacks = [
+    "groq/qwen/qwen3.8-27b",
+    "mistral/ministral-3b-latest",
+]
+
+# -- Stage 2: writing (article + polish) ------------------------------------
+# Article generation benefits from a long context, so it prefers Gemini.
+# Polishing rewrites the whole article in one call and needs the largest
+# token budget of any stage.
+
+[stages.article_gen]
+model = "gemini/gemini-2.5-flash"
+fallbacks = [
+    "groq/qwen/qwen3.8-27b",
+    "mistral/ministral-3b-latest",
+]
+
+[stages.article_polish]
+model = "gemini/gemini-2.5-flash-lite"
+fallbacks = [
+    "groq/qwen/qwen3.8-27b",
+    "mistral/ministral-3b-latest",
+]
+
+# -- Optional: pin the model used for a whole provider ------------------------
+# Uncomment to override the model named above for every stage that uses the
+# provider.  Useful when a provider's free model list changes.
+#
+# [providers.gemini]
+# model = "gemini-2.5-flash-lite"
+#
+# [providers.groq]
+# model = "openai/gpt-oss-20b"

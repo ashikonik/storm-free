@@ -1,0 +1,92 @@
+name: Nightly provider probe
+
+on:
+  schedule:
+    # 04:17 UTC each morning.  Off the hour on purpose: the free tiers reset
+    # on a daily cycle, and a burst of scheduled jobs at :00 would land on
+    # every provider's quota window at once.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe the free-tier providers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone the upstream STORM repository
+        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+
+      - name: Install the upstream requirements
+        run: |
+          python -m venv venv
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            "torch==2.4.1" "torchvision==0.19.1"
+          ./venv/bin/pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            -r storm/requirements.txt
+          ./venv/bin/pip install "sentence-transformers==3.4.1" "huggingface_hub>=0.23,<1.0"
+          ./venv/bin/pip install ddgs
+
+      - name: Check whether the provider secrets are configured
+        id: secrets
+        run: |
+          # The workflow is useful only with keys.  When they are absent the
+          # run says so plainly and exits successfully, rather than failing
+          # the build every night for a missing secret.
+          if [ -z "${{ secrets.GROQ_API_KEY }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "No provider keys are configured; skipping the probe."
+            echo "### Nightly provider probe" >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped: no provider API keys are configured in the repository secrets." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write the secrets file
+        if: steps.secrets.outputs.configured == 'true'
+        run: |
+          # Only non-empty values are written.  A placeholder would shadow a
+          # key that happens to be exported in the environment, and the
+          # provider would report a confusing authentication error.
+          {
+            echo 'GROQ_API_KEY = "${{ secrets.GROQ_API_KEY }}"'
+            echo 'GEMINI_API_KEY = "${{ secrets.GEMINI_API_KEY }}"'
+            echo 'GOOGLE_API_KEY = "${{ secrets.GOOGLE_API_KEY }}"'
+            echo 'MISTRAL_API_KEY = "${{ secrets.MISTRAL_API_KEY }}"'
+            echo 'OPENROUTER_API_KEY = "${{ secrets.OPENROUTER_API_KEY }}"'
+            echo 'SAMBANOVA_API_KEY = "${{ secrets.SAMBANOVA_API_KEY }}"'
+            echo 'TOGETHER_API_KEY = "${{ secrets.TOGETHER_API_KEY }}"'
+            echo 'TOGETHERAI_API_KEY = "${{ secrets.TOGETHERAI_API_KEY }}"'
+          } > secrets.toml
+
+      - name: Probe the providers
+        if: steps.secrets.outputs.configured == 'true'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./venv/bin/python run_storm_free.py --doctor 2>&1 | tee doctor.log || true
+
+      - name: Summarise the result
+        if: steps.secrets.outputs.configured == 'true'
+        run: |
+          {
+            echo "### Nightly provider probe"
+            echo ""
+            echo "Probed on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo ""
+            echo '```'
+            grep -E '^\s*\[(ok|!!|~~|--)\]' doctor.log || echo "(no probe results)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

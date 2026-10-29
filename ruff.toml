@@ -1,0 +1,29 @@
+line-length = 88
+target-version = "py311"
+
+[lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+    "BLE",  # blind except
+]
+ignore = [
+    # The upstream clone is imported by path, so the imports cannot all sit
+    # at the top of the file.
+    "E402",
+    # Long lines in the provider table are easier to read as one per line.
+    "E501",
+    # ``except Exception`` is deliberate in the fallback chain: every
+    # provider error has to be classified so the chain can fail over.
+    "BLE001",
+]
+
+[lint.per-file-ignores]
+# Tests may import private helpers to check their behaviour directly.
+"tests/*" = ["SLF001"]

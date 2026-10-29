@@ -1,0 +1,36 @@
+# Secrets — never commit these
+secrets.toml
+*.key
+*.pem
+.env
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Generated output
+outputs/
+results/
+DEMO_WORKING_DIR/
+
+# Per-run logs (append-only record of each run; STATUS.md is the durable one)
+logs/
+# Local, machine-specific status notes that must not be committed
+STATUS.local.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Upstream clone (kept as a nested checkout, not part of this repo's history)
+storm/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

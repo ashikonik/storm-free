@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff==0.9.6
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format
+        run: ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The upstream clone is gitignored, so CI has to fetch it itself.
+      - name: Clone the upstream STORM repository
+        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+
+      - name: Install the upstream requirements
+        run: |
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            "torch==2.4.1" "torchvision==0.19.1"
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            -r storm/requirements.txt
+
+      - name: Install the pinned and test dependencies
+        run: |
+          pip install "sentence-transformers==3.4.1" "huggingface_hub>=0.23,<1.0"
+          pip install ddgs pytest
+
+      - name: Run the test suite
+        run: python -m pytest tests -v
+
+  mypy:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone the upstream STORM repository
+        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+
+      - name: Install the type checker and the upstream requirements
+        run: |
+          pip install mypy types-toml
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            "torch==2.4.1" "torchvision==0.19.1"
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            --index-strategy unsafe-best-match \
+            -r storm/requirements.txt
+
+      - name: Type check
+        run: mypy
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The real secrets file must not be tracked
+        run: |
+          if git ls-files --error-unmatch secrets.toml >/dev/null 2>&1; then
+            echo "::error::secrets.toml is tracked. Remove it from the repository."
+            exit 1
+          fi
+          echo "secrets.toml is not tracked."
+
+      - name: No key-shaped strings in the committed files
+        run: |
+          # Scan only the files git actually tracks.  The working copy holds
+          # a real secrets.toml, which is gitignored and must never be read
+          # into a CI log -- let alone committed.
+          # Match the prefixes the supported providers actually issue, so a
+          # real key is caught without flagging every long random string.
+          if git ls-files -z | xargs -0 grep -InE \
+            "(gsk_|sk-or-v1-|sk-ant-|AIza|AKIA)[A-Za-z0-9_-]{20,}" ; then
+            echo "::error::A key-shaped string was found in a committed file."
+            exit 1
+          fi
+          echo "No key-shaped strings in the committed files."
+
+      - name: The template must hold no real key
+        run: |
+          if grep -vE "^\s*(#|$|[A-Za-z0-9_]+\s*=\s*\"?\"?\s*$)" secrets.toml.example \
+            | grep -qE "=\s*\"[^\"]{16,}"; then
+            echo "::error::secrets.toml.example appears to contain a real key."
+            exit 1
+          fi
+          echo "secrets.toml.example holds no values."
