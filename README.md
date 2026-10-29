@@ -1,5 +1,7 @@
 # Free-Tier STORM
 
+[![CI](https://github.com/ashikonik/storm-free/actions/workflows/ci.yml/badge.svg)](https://github.com/ashikonik/storm-free/actions/workflows/ci.yml)
+
 Run [STORM](https://github.com/stanford-oval/storm) — the LLM knowledge-curation
 system that writes Wikipedia-style articles with citations — using **only free
 API keys**, with automatic failover between providers.

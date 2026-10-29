@@ -12,6 +12,7 @@ Run with:  ./venv/bin/python -m pytest tests/test_run_log.py -v
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -90,7 +91,13 @@ class TestRunLog:
         target = tmp_path / "run.log"
         with RunLog(target, topic="t") as log:
             log.write("something happened")
-        assert "[1" in target.read_text()
+        # Every line opens with an ``[HH:MM:SS]`` stamp.  The shape is
+        # checked rather than a literal hour, because the hour depends on
+        # when the suite happens to run.
+        lines = target.read_text().splitlines()
+        assert lines
+        for line in lines:
+            assert re.fullmatch(r"\[\d{2}:\d{2}:\d{2}\] .*", line), line
 
     def test_a_block_is_indented(self, tmp_path: Path) -> None:
         target = tmp_path / "run.log"

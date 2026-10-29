@@ -32,6 +32,13 @@ are the detail behind the summary here.
 - [x] **Test suite** — 223 tests, no network access required.
 - [x] **Formatting and typing** — `ruff format` and `ruff check` are the
       project standard; `mypy.ini` configures the type checker.
+- [x] **CI/CD pipeline** — GitHub Actions on every push and pull request:
+      `lint` (ruff check + format), `test` (pytest against a fresh clone of
+      upstream STORM), `mypy`, and `secret-scan`.
+- [x] **Nightly provider probe** — a scheduled workflow runs `--doctor`
+      against the configured providers and publishes the result to the job
+      summary. It skips cleanly when no provider keys are set.
+- [x] **Published** — `github.com/ashikonik/storm-free`, public.
 
 ## Verified end to end
 
@@ -48,11 +55,12 @@ are the detail behind the summary here.
 
 ## Ongoing
 
-- [ ] **CI/CD pipeline** — GitHub Actions workflows (lint, test, mypy,
-      secret scan) and the nightly provider probe.
-- [ ] **Publish the repository** — push to `github.com/ashikonik/storm-free`.
 - [ ] **Nightly probe secrets** — the workflow needs repository secrets
-      configured to be useful.
+      (`GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, ...) configured
+      to be useful. Without them it reports "Skipped: no provider API keys
+      are configured" and exits successfully.
+- [ ] **More provider keys** — 16 of the 22 registered providers still have
+      no key, so only the six configured ones are exercised in practice.
 
 ## Blocked
 
