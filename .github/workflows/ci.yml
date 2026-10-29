@@ -76,6 +76,61 @@ jobs:
       - name: Run the test suite
         run: ./venv/bin/python -m pytest tests -v
 
+  cli:
+    name: CLI smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone the upstream STORM repository
+        run: |
+          git clone https://github.com/stanford-oval/storm.git storm
+          git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the dependencies
+        run: |
+          set -euo pipefail
+          uv venv --python 3.11 venv
+          export VIRTUAL_ENV="$PWD/venv"
+          export UV_HTTP_TIMEOUT=300
+          PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
+          uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
+            --index-strategy unsafe-best-match \
+            "torch==2.4.1" "torchvision==0.19.1"
+          uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
+            --index-strategy unsafe-best-match \
+            -r storm/requirements.txt
+          uv pip install "sentence-transformers==3.4.1" "huggingface_hub>=0.23,<1.0"
+          uv pip install ddgs pytest
+
+      # The CLI is the only thing a user actually touches, so it gets its
+      # own job: a break in the entry point then fails here, with a name
+      # that says so, rather than hiding among the unit tests.
+      - name: The CLI starts and lists the providers
+        run: |
+          set -euo pipefail
+          ./venv/bin/python run_storm_free.py --help > /dev/null
+          ./venv/bin/python run_storm_free.py --list-providers | grep -q groq
+          echo "The CLI starts and lists the providers."
+
+      - name: The CLI resolves a plan without spending anything
+        run: |
+          set -euo pipefail
+          ./venv/bin/python run_storm_free.py "a test topic" --dry-run | grep -q "Dry run"
+          echo "The CLI resolves a plan."
+
+      - name: Run the CLI test suite
+        run: ./venv/bin/python -m pytest tests/test_cli.py -v
+
   mypy:
     name: Type check
     runs-on: ubuntu-latest

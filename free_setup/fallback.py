@@ -1050,12 +1050,12 @@ class FallbackLM:
         }
         with self._lock:
             self.history.append(entry)
-        try:
-            lm.history.append(entry)
-        except Exception:
-            logger.debug(
-                "Could not append to history for %s", getattr(lm, "model", "?")
-            )
+            try:
+                lm.history.append(entry)
+            except Exception:
+                logger.debug(
+                    "Could not append to history for %s", getattr(lm, "model", "?")
+                )
 
     def _record_failure(self, model_id: str, verdict: str) -> None:
         with self._lock:

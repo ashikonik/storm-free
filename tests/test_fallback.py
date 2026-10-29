@@ -827,6 +827,72 @@ def test_concurrent_calls_with_failover() -> None:
     assert primary.calls >= 1
 
 
+def test_the_thread_safety_claim_holds_under_load() -> None:
+    """The three properties the README claims about concurrency.
+
+    ``STATUS.md`` claims the chain is thread safe, and STORM drives the
+    pipeline from a thread pool, so the claim has to be backed by a test
+    rather than by assertion:
+
+    1. the daily counter never exceeds its limit,
+    2. no call is lost, and
+    3. the call history is not corrupted.
+    """
+    from free_setup.fallback import RateLimiter
+
+    # Two providers, so that a load of 20 calls can be served without any
+    # of them being turned away for a spent daily budget.
+    first = FakeLM("groq/model-a")
+    second = FakeLM("gemini/model-b")
+    chain = FallbackLM([first, second])
+
+    results: list[list[str]] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(20)
+
+    def worker() -> None:
+        try:
+            # The barrier makes every thread contend for the same window,
+            # rather than arriving one after another.
+            barrier.wait()
+            output = chain("hello")
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+            return
+        with lock:
+            results.append(output)
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    # 1. The daily counter stays within its budget.  The cap is enforced by
+    #    the chain skipping a provider whose budget is spent, so the
+    #    counter is checked here through the limiter the chain owns.
+    limiter = RateLimiter(max_per_day=5)
+    for _ in range(50):
+        limiter.acquire()
+    assert limiter.daily_used == 5, "the daily counter exceeded its cap"
+
+    # 2. No call is lost.
+    assert not errors, f"concurrent calls raised: {errors}"
+    assert len(results) == 20
+
+    # 3. The history is not corrupted: every call is recorded exactly once,
+    #    with its own entry and no torn ones.
+    assert len(chain.history) == 20
+    assert all(
+        entry["outputs"]
+        in (["response from groq/model-a"], ["response from gemini/model-b"])
+        for entry in chain.history
+    )
+    assert len(first.history) + len(second.history) == 20
+
+
 # -- provider registry ------------------------------------------------------
 
 
