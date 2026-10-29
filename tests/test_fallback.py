@@ -17,6 +17,7 @@ from free_setup.fallback import (
     CostRecord,
     CostTracker,
     FallbackLM,
+    GreedySamplingError,
     classify_error,
 )
 from free_setup.providers import (
@@ -46,6 +47,14 @@ class AuthenticationError(FakeHTTPError):
 
 class BadRequestError(FakeHTTPError):
     """Stand-in for litellm.exceptions.BadRequestError."""
+
+
+class PermissionDeniedError(FakeHTTPError):
+    """Stand-in for litellm.exceptions.PermissionDeniedError."""
+
+
+class NotFoundError(FakeHTTPError):
+    """Stand-in for litellm.exceptions.NotFoundError."""
 
 
 class APIConnectionError(Exception):
@@ -91,9 +100,17 @@ def test_connection_error_is_retryable() -> None:
     assert classify_error(APIConnectionError("no route")) == "retry"
 
 
-def test_auth_error_is_fatal() -> None:
-    assert classify_error(AuthenticationError("bad key", 401)) == "fatal"
-    assert classify_error(AuthenticationError("forbidden", 403)) == "fatal"
+def test_auth_error_is_provider_scoped() -> None:
+    """A rejected key condemns the provider, not the request.
+
+    The registry deliberately contains providers whose free tier may be
+    exhausted or whose key may be wrong.  One of them must not sink a run
+    that has healthy providers queued behind it.
+    """
+    assert classify_error(AuthenticationError("bad key", 401)) == "provider_dead"
+    assert classify_error(AuthenticationError("forbidden", 403)) == "provider_dead"
+    assert classify_error(PermissionDeniedError("nope", 403)) == "provider_dead"
+    assert classify_error(NotFoundError("gone", 404)) == "provider_dead"
 
 
 def test_bad_request_is_fatal() -> None:
@@ -110,6 +127,31 @@ def test_cause_chain_is_inspected() -> None:
     outer = RuntimeError("request failed")
     outer.__cause__ = inner
     assert classify_error(outer) == "retry"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "BudgetExceededError",
+        "RejectedRequestError",
+        "UnsupportedParamsError",
+        "BlockedPiiEntityError",
+        "OpenAIError",
+    ],
+)
+def test_provider_side_errors_are_retryable(name: str) -> None:
+    """These are provider-side conditions another provider can serve.
+
+    They used to fall through to "unknown", which is not a verdict the chain
+    treats as a clean failover.
+    """
+    exc = type(name, (Exception,), {})(name)
+    assert classify_error(exc) == "retry"
+
+
+def test_greedy_sampling_error_is_retryable() -> None:
+    """A sampling complaint is the provider's mood, not the request's fault."""
+    assert classify_error(GreedySamplingError("top_p must be 1")) == "retry"
 
 
 # -- failover behaviour -----------------------------------------------------
@@ -135,15 +177,30 @@ def test_fallback_takes_over_on_rate_limit() -> None:
     assert backup.calls == 1
 
 
-def test_auth_error_does_not_fall_through() -> None:
-    """A wrong API key must surface, not be hidden behind a fallback."""
+def test_auth_error_advances_the_chain() -> None:
+    """A wrong API key must not sink a run that has healthy providers behind it.
+
+    The chain moves on to the next provider, because the request itself is
+    fine and another provider can serve it.
+    """
     primary = FakeLM("groq/model-a", AuthenticationError("bad key", 401))
     backup = FakeLM("gemini/model-b")
     chain = FallbackLM([primary, backup])
 
-    with pytest.raises(AuthenticationError):
+    assert chain("hello") == ["response from gemini/model-b"]
+    assert primary.calls == 1
+    assert backup.calls == 1
+
+
+def test_bad_request_does_not_advance_the_chain() -> None:
+    """A bad request is the caller's fault, so retrying elsewhere will not help."""
+    primary = FakeLM("groq/model-a", BadRequestError("bad model", 400))
+    backup = FakeLM("gemini/model-b")
+    chain = FallbackLM([primary, backup])
+
+    with pytest.raises(BadRequestError):
         chain("hello")
-    assert backup.calls == 0, "fatal errors must not advance the chain"
+    assert backup.calls == 0, "request-scoped errors must not advance the chain"
 
 
 def test_all_providers_failing_raises() -> None:
@@ -170,6 +227,114 @@ def test_successful_provider_becomes_sticky() -> None:
 def test_empty_chain_is_rejected() -> None:
     with pytest.raises(ValueError):
         FallbackLM([])
+
+
+# -- greedy-sampling recovery ------------------------------------------------
+
+
+class GreedyLM(FakeLM):
+    """A model that always refuses because of its sampling mode.
+
+    Mirrors Mistral's ``"top_p must be 1 when using greedy sampling"``.
+    """
+
+    def __init__(self, model: str) -> None:
+        super().__init__(
+            model,
+            BadRequestError(
+                "MistralException - top_p must be 1 when using greedy sampling.",
+                400,
+            ),
+        )
+
+
+def test_greedy_sampling_error_does_not_abort_the_chain() -> None:
+    """One provider's sampling quirk must not sink the whole run.
+
+    This is the failure recorded in the project's own run log: Mistral
+    refused the request, the recovery attempt refused it too, and the
+    resulting BadRequestError aborted the chain while Groq and Gemini were
+    still waiting behind it.
+    """
+    primary = GreedyLM("mistral/model-a")
+    backup = FakeLM("groq/model-b")
+    chain = FallbackLM([primary, backup])
+
+    assert chain("hello") == ["response from groq/model-b"]
+    assert primary.calls == 1
+    assert backup.calls == 1
+
+
+def test_greedy_sampling_error_is_raised_as_its_own_type() -> None:
+    """The error must not escape as a request-scoped BadRequestError."""
+    primary = GreedyLM("mistral/model-a")
+    chain = FallbackLM([primary])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        chain("hello")
+    # A single-provider chain has nowhere to fall back to, so the error
+    # surfaces -- but as the retryable type, not as a fatal bad request.
+    assert isinstance(excinfo.value.__cause__, GreedySamplingError)
+
+
+# -- call history ------------------------------------------------------------
+
+
+def test_history_is_recorded_on_the_wrapper() -> None:
+    """Upstream reads the wrapper's history, not the inner model's.
+
+    Appending only to the inner model left ``llm_call_history.jsonl``
+    empty in every run.
+    """
+    primary = FakeLM("groq/model-a")
+    chain = FallbackLM([primary])
+
+    chain("hello")
+
+    assert len(chain.history) == 1
+    assert chain.history[0]["outputs"] == ["response from groq/model-a"]
+
+
+def test_history_survives_the_way_upstream_collects_it() -> None:
+    """Mirror upstream's ``collect_and_reset_lm_history`` behaviour.
+
+    Upstream walks the ``*_lm`` attributes of the LM config object -- each
+    of which holds the ``FallbackLM`` wrapper -- and collects their
+    ``history`` lists.
+    """
+    primary = FakeLM("groq/model-a")
+    chain = FallbackLM([primary])
+
+    chain("hello")
+
+    # Stand in for upstream's STORMWikiLMConfigs, which holds the wrapper
+    # in a ``*_lm`` attribute.  Upstream iterates the *instance* dict, so
+    # the attribute has to be set on the instance.
+    class _LMConfigs:
+        pass
+
+    lm_configs = _LMConfigs()
+    lm_configs.conv_simulator_lm = chain
+
+    history = []
+    for attr_name in lm_configs.__dict__:
+        if "_lm" in attr_name and hasattr(getattr(lm_configs, attr_name), "history"):
+            history.extend(getattr(lm_configs, attr_name).history)
+            getattr(lm_configs, attr_name).history = []
+
+    assert len(history) == 1, "the history entry must survive collection"
+
+
+def test_usage_summary_reports_tokens_and_calls() -> None:
+    """The run log needs token usage; upstream's summary() returns None."""
+    primary = FakeLM("groq/model-a")
+    chain = FallbackLM([primary])
+
+    chain("hello")
+
+    summary = chain.usage_summary()
+    assert "groq/model-a" in summary
+    assert summary["groq/model-a"]["calls"] == 1
 
 
 # -- LiteLLM response parsing ------------------------------------------------
@@ -517,6 +682,48 @@ def test_chain_retires_a_daily_exhausted_provider() -> None:
 
     assert primary.calls == 1, "the exhausted model must not be retried"
     assert backup.calls == 2
+
+
+def test_daily_counter_never_exceeds_the_cap() -> None:
+    """The counter records admitted calls, so it cannot drift past the cap.
+
+    It used to increment before checking the limit, so every call made
+    after the budget was spent pushed the counter further past it.
+    """
+    from free_setup.fallback import RateLimiter
+
+    limiter = RateLimiter(max_per_day=2)
+    for _ in range(10):
+        limiter.acquire()
+
+    assert limiter.daily_used == 2, "the counter must be clamped at the cap"
+
+
+def test_daily_counter_is_admission_accurate_under_concurrency() -> None:
+    """Concurrent callers must not push the counter past the cap.
+
+    The counter records admitted calls and is clamped, so however many
+    threads race for it the value stays within the budget.  The chain
+    enforces the cap separately, by skipping a provider whose budget is
+    spent (see ``test_chain_retires_a_daily_exhausted_provider``).
+    """
+    from free_setup.fallback import RateLimiter
+
+    limiter = RateLimiter(max_per_day=5)
+    barrier = threading.Barrier(20)
+
+    def worker() -> None:
+        barrier.wait()
+        limiter.acquire()
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert limiter.daily_used == 5, "the counter must never exceed the cap"
+    assert limiter.exhausted is True, "the provider must be marked exhausted"
 
 
 def test_rate_limiter_with_both_limits_does_not_deadlock() -> None:

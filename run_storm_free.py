@@ -117,7 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default=None,
-        help="Override the model for every stage, e.g. 'groq/openai/gpt-oss-120b'.",
+        help=(
+            "Override the primary model for every stage, e.g. "
+            "'groq/qwen/qwen3.8-27b'. The configured fallback chain is kept."
+        ),
     )
     parser.add_argument(
         "--max-conv-turn", type=int, default=None, help="Questions per conversation."
@@ -280,10 +283,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.model:
         from free_setup.config import StageConfig
 
-        stages = {
-            name: StageConfig(name=name, model=args.model, fallbacks=())
-            for name in STAGES
-        }
+        # ``--model`` overrides the *primary* model for every stage.  The
+        # configured fallbacks are kept, because dropping them would
+        # silently disable the failover that is the whole point of this
+        # project -- and a user reaching for ``--model`` is often doing so
+        # precisely because a provider is misbehaving.
+        stages = {}
+        for name in STAGES:
+            original = config.stages[name]
+            fallbacks = tuple(
+                model for model in original.fallbacks if model != args.model
+            )
+            stages[name] = StageConfig(
+                name=name,
+                model=args.model,
+                fallbacks=fallbacks,
+            )
         config = type(config)(
             stages=stages,
             defaults=dict(config.defaults),
@@ -403,14 +418,69 @@ def _run_pipeline(
         if run_log is not None:
             run_log.write(f"article: {article_dir}")
 
-    try:
-        summary = runner.summary()
-        if summary and run_log is not None:
-            run_log.record_summary(summary)
-    except Exception:
-        logger.debug("Summary unavailable", exc_info=True)
+    if run_log is not None:
+        _record_run_summary(runner, run_log)
 
     return 0
+
+
+def _record_run_summary(runner: Any, run_log: RunLog) -> None:
+    """Record token usage and provider statistics in the run log.
+
+    Upstream's ``Engine.summary()`` prints its report and returns ``None``,
+    so it cannot be used to fill the run log.  The wrapper's own tracker
+    holds the same information, so the summary is built from that instead.
+    """
+    lines: list[str] = []
+    elapsed = getattr(runner, "time", None)
+    if isinstance(elapsed, dict) and elapsed:
+        lines.append("Execution time:")
+        for stage, seconds in elapsed.items():
+            lines.append(f"    {stage}: {seconds:.4f} seconds")
+        lines.append("")
+
+    usage: dict[str, dict[str, int]] = {}
+    lm_configs = getattr(runner, "lm_configs", None)
+    # Upstream keeps the language models in ``*_lm`` attributes of the
+    # config object and walks them the same way when it collects usage.
+    for attr_name in dir(lm_configs) if lm_configs is not None else []:
+        if "_lm" not in attr_name:
+            continue
+        lm = getattr(lm_configs, attr_name, None)
+        getter = getattr(lm, "usage_summary", None)
+        if not callable(getter):
+            continue
+        try:
+            for model, tokens in getter().items():
+                entry = usage.setdefault(
+                    model,
+                    {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "calls": 0,
+                    },
+                )
+                for key, value in tokens.items():
+                    entry[key] = entry.get(key, 0) + value
+        except Exception:
+            logger.debug("Could not read usage summary", exc_info=True)
+
+    if usage:
+        lines.append("Token usage of language models:")
+        for model, tokens in sorted(usage.items()):
+            lines.append(
+                f"    {model}: {tokens['prompt_tokens']} prompt + "
+                f"{tokens['completion_tokens']} completion = "
+                f"{tokens['total_tokens']} tokens "
+                f"over {tokens['calls']} call(s)"
+            )
+        total = sum(t["total_tokens"] for t in usage.values())
+        lines.append(f"    total: {total} tokens")
+        lines.append("")
+
+    if lines:
+        run_log.write_block("summary", "\n".join(lines).rstrip())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

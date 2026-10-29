@@ -60,22 +60,53 @@ _RETRYABLE_EXC_NAMES = frozenset(
         "ConnectTimeout",
         "ReadTimeout",
         "RemoteProtocolError",
+        # Provider-side conditions that are transient or that another
+        # provider can serve perfectly well.
+        "BudgetExceededError",
+        "RejectedRequestError",
+        "UnsupportedParamsError",
+        "BlockedPiiEntityError",
+        "OpenAIError",
     }
 )
 
 # Exception class names that must NOT trigger a fallback.
 _FATAL_EXC_NAMES = frozenset(
     {
-        "AuthenticationError",
-        "PermissionDeniedError",
         "BadRequestError",
-        "NotFoundError",
         "UnprocessableEntityError",
         "ContextWindowExceededError",
         "ContentPolicyViolationError",
         "InvalidRequestError",
     }
 )
+
+# Exception class names that condemn *this provider* rather than this
+# request.  A rejected key, a revoked permission or a model that no longer
+# exists will fail identically on every call, so the chain should move on to
+# the next provider instead of aborting the whole stage.  This matters
+# because the registry deliberately contains providers whose free tier may be
+# exhausted or whose key may be wrong -- one of them must not sink a run that
+# has healthy providers queued behind it.
+_PROVIDER_SCOPED_EXC_NAMES = frozenset(
+    {
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "NotFoundError",
+    }
+)
+
+
+class GreedySamplingError(RuntimeError):
+    """The provider refused a request because of its sampling mode.
+
+    Raised instead of letting the provider's own ``BadRequestError`` escape.
+    A ``BadRequestError`` is request-scoped and aborts the chain, but a
+    sampling complaint is about the *provider's* mood, not about the request:
+    the request is well formed and another attempt with ``top_p=1`` may well
+    succeed.  Keeping it in its own type lets the chain treat it as
+    retryable and move on to the next provider.
+    """
 
 
 @dataclass(frozen=True)
@@ -133,13 +164,32 @@ class CostTracker:
 
 
 def classify_error(exc: BaseException) -> str:
-    """Classify an exception as ``"retry"``, ``"fatal"`` or ``"unknown"``."""
+    """Classify an exception for the fallback chain.
+
+    Returns one of:
+
+    ``"retry"``
+        Transient.  Try the next provider.
+    ``"provider_dead"``
+        This provider is unusable (bad key, revoked permission, retired
+        model), but the request itself is fine.  Try the next provider.
+    ``"fatal"``
+        The request itself is bad.  Retrying it elsewhere will not help, so
+        the chain aborts.
+    ``"unknown"``
+        Unrecognised; treated as retryable by the chain.
+    """
+    # A sampling complaint is the provider's mood, not the request's
+    # fault, so it is retryable regardless of how it was reported.
+    if isinstance(exc, GreedySamplingError):
+        return "retry"
+
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
         if status in _RETRYABLE_STATUS:
             return "retry"
         if status in (401, 403):
-            return "fatal"
+            return "provider_dead"
 
     # Walk the cause chain: LiteLLM wraps provider errors in its own types.
     seen: set[int] = set()
@@ -149,6 +199,8 @@ def classify_error(exc: BaseException) -> str:
         name = type(current).__name__
         if name in _FATAL_EXC_NAMES:
             return "fatal"
+        if name in _PROVIDER_SCOPED_EXC_NAMES:
+            return "provider_dead"
         if name in _RETRYABLE_EXC_NAMES:
             return "retry"
         current = current.__cause__ or current.__context__
@@ -176,6 +228,22 @@ def _is_greedy_sampling_error(exc: BaseException) -> bool:
         or "greedy_sampling" in message
         or "top_p must be 1" in message
     )
+
+
+def _normalise_greedy_sampling(exc: BaseException) -> BaseException:
+    """Convert a provider's sampling complaint into our own exception type.
+
+    Providers report this as a ``BadRequestError``, which is request-scoped
+    and aborts the whole fallback chain.  But the complaint is about the
+    provider's sampling mode, not about the request: the request is well
+    formed and another provider can serve it.  Converting it here means the
+    chain treats it as retryable wherever it surfaces.
+    """
+    if isinstance(exc, GreedySamplingError):
+        return exc
+    if _is_greedy_sampling_error(exc):
+        return GreedySamplingError(str(exc))
+    return exc
 
 
 def _sleep_in_slices(seconds: float, slice_seconds: float = 1.0) -> None:
@@ -432,6 +500,13 @@ class RateLimiter:
         The limiter keeps the timestamps of the calls made in the last
         window.  When that count has reached the cap, the next call waits
         until the oldest one falls out of the window.
+
+        A call is counted against the daily budget only once it has been
+        *admitted*: the decision to let a call through and the increment of
+        the counter happen together under one lock acquisition, so
+        concurrent callers cannot all observe "under the cap" and all
+        proceed.  This keeps ``daily_used`` an accurate count of the calls
+        actually made, never more than ``max_per_day``.
         """
         if not self.max_per_minute or self.max_per_minute <= 0:
             with self._lock:
@@ -461,12 +536,16 @@ class RateLimiter:
 
         Must be called with the lock held.  The lock is not reentrant, so
         this helper deliberately does not take it itself; the caller decides.
+
+        The counter is clamped at ``max_per_day``: it records calls that
+        were admitted, so it can never drift past the cap no matter how
+        many calls are attempted afterwards.
         """
         if not self.max_per_day:
             return
         self._roll_daily_if_due()
-        self._daily_count += 1
-        if self._daily_count > self.max_per_day:
+        self._daily_count = min(self._daily_count + 1, self.max_per_day)
+        if self._daily_count >= self.max_per_day:
             self._exhausted = True
 
     def penalise(self, seconds: float) -> None:
@@ -622,6 +701,50 @@ class FallbackLM:
             self._tracker = CostTracker()
             return usage
 
+    def usage_summary(self) -> dict[str, dict[str, int]]:
+        """Return token usage per model, without resetting the counters.
+
+        Upstream's ``Engine.summary()`` only prints its report and returns
+        ``None``, so the run log cannot use it.  This accessor exposes the
+        same information from the tracker the wrapper already maintains, so
+        a run log can record what each provider actually cost.
+
+        The returned mapping is keyed by model id and holds
+        ``prompt_tokens``, ``completion_tokens``, ``total_tokens`` and
+        ``calls``.
+        """
+        with self._lock:
+            by_model = self._tracker.by_model()
+            calls = dict(self._call_counts)
+        summary: dict[str, dict[str, int]] = {}
+        for model, tokens in by_model.items():
+            prompt = tokens.get("prompt_tokens", 0)
+            completion = tokens.get("completion_tokens", 0)
+            summary[model] = {
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "total_tokens": prompt + completion,
+                "calls": calls.get(model, 0),
+            }
+        for model, count in calls.items():
+            # A provider that served requests but returned no usage should
+            # still show up in the summary.
+            summary.setdefault(
+                model,
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "calls": count,
+                },
+            )
+        return summary
+
+    def provider_stats(self) -> dict[str, int]:
+        """Return the number of requests served by each provider."""
+        with self._lock:
+            return dict(self._call_counts)
+
     # -- invocation ----------------------------------------------------
 
     def __call__(
@@ -684,6 +807,20 @@ class FallbackLM:
                     )
                     raise
 
+                if verdict == "provider_dead":
+                    # This provider is unusable -- a rejected key, revoked
+                    # permission or a retired model.  The request itself is
+                    # fine, so move on to the next provider rather than
+                    # sinking the whole stage.  The registry deliberately
+                    # contains providers whose free tier may be exhausted.
+                    logger.warning(
+                        "Provider %s is unusable (%s); trying the next "
+                        "provider in the chain.",
+                        model_id,
+                        type(exc).__name__,
+                    )
+                    continue
+
                 if _is_daily_quota_error(exc) and limiter is not None:
                     # The provider says its *daily* quota is gone.  No amount
                     # of waiting inside this run helps, so park it for the day
@@ -741,6 +878,14 @@ class FallbackLM:
             # Bill the tokens to the provider that served this request, not
             # to whichever provider happens to be active by now.
             self._record_usage(model_id, response)
+            # Record the provider that actually served the request.  The run
+            # log only ever saw failures before, so it was impossible to
+            # tell afterwards which provider had produced the article.
+            logger.info(
+                "Provider %s served the request (%d call(s) so far).",
+                model_id,
+                self._call_counts.get(model_id, 0),
+            )
             return outputs
 
         if last_exc is None and skipped:
@@ -784,7 +929,11 @@ class FallbackLM:
         tokens to the provider that actually served the request.
         """
         if self.use_cache or not self._is_litellm_model(lm):
-            outputs = lm(prompt=prompt, messages=messages, **kwargs)
+            try:
+                outputs = lm(prompt=prompt, messages=messages, **kwargs)
+            except Exception as exc:
+                raise _normalise_greedy_sampling(exc) from None
+            self._record_history(lm, prompt, messages, outputs, {})
             return outputs, {}
         return self._invoke_uncached(lm, prompt, messages, kwargs)
 
@@ -798,8 +947,8 @@ class FallbackLM:
             return hasattr(lm, "model") and not hasattr(lm, "base_url")
         return False
 
-    @staticmethod
     def _invoke_uncached(
+        self,
         lm: Any,
         prompt: str | None,
         messages: list[dict[str, str]] | None,
@@ -843,29 +992,70 @@ class FallbackLM:
                 getattr(lm, "model", "?"),
             )
             payload["top_p"] = 1.0
-            response = litellm.completion(
-                cache={"no-cache": True, "no-store": True}, **payload
-            )
+            try:
+                response = litellm.completion(
+                    cache={"no-cache": True, "no-store": True}, **payload
+                )
+            except Exception as retry_exc:
+                if not _is_greedy_sampling_error(retry_exc):
+                    raise
+                # The provider rejected the sampling parameters a second
+                # time, even with top_p=1.  The error it raised is a
+                # BadRequestError, which is request-scoped and would abort
+                # the whole chain -- but the complaint is about the
+                # provider's sampling mode, not about the request.  Raise a
+                # dedicated type so the chain treats it as retryable and
+                # moves on to the next provider instead of killing the run.
+                logger.warning(
+                    "Provider %s rejected the sampling parameters again; "
+                    "giving up on it for this request.",
+                    getattr(lm, "model", "?"),
+                )
+                raise GreedySamplingError(
+                    f"{getattr(lm, 'model', '?')} refused the request twice "
+                    "because of its sampling mode: "
+                    f"{retry_exc}"
+                ) from retry_exc
         response_dict = _response_to_dict(response)
         outputs = [
             _choice_text(choice) for choice in response_dict.get("choices") or []
         ]
+        self._record_history(lm, prompt, payload["messages"], outputs, response_dict)
+        return outputs, response_dict
+
+    def _record_history(
+        self,
+        lm: Any,
+        prompt: str | None,
+        messages: list[dict[str, str]] | None,
+        outputs: list[str],
+        response: dict[str, Any],
+    ) -> None:
+        """Record one call in the history upstream collects.
+
+        Upstream's ``collect_and_reset_lm_history`` reads the *wrapper's*
+        ``history`` attribute -- the one on the object STORM holds a
+        reference to -- and writes it to ``llm_call_history.jsonl``.
+        Appending only to the inner model's history left that file empty in
+        every run, so the entry has to go on the wrapper as well.
+        """
         # Mirror LitellmModel's bookkeeping so history stays useful.  The
         # wrapper records the usage itself, against the provider that served
         # the request.
-        entry = dict(
-            prompt=prompt,
-            messages=payload["messages"],
-            outputs=outputs,
-            usage=dict(response_dict.get("usage") or {}),
-        )
+        entry: dict[str, Any] = {
+            "prompt": prompt,
+            "messages": messages or [{"role": "user", "content": prompt}],
+            "outputs": outputs,
+            "usage": dict((response or {}).get("usage") or {}),
+        }
+        with self._lock:
+            self.history.append(entry)
         try:
             lm.history.append(entry)
         except Exception:
             logger.debug(
                 "Could not append to history for %s", getattr(lm, "model", "?")
             )
-        return outputs, response_dict
 
     def _record_failure(self, model_id: str, verdict: str) -> None:
         with self._lock:
