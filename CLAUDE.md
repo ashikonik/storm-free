@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Version:** 1.0.0 | **Python:** 3.11 (venv) | **Upstream:** stanford-oval/storm
+**Version:** 1.0.1 | **Python:** 3.11 (venv) | **Upstream:** stanford-oval/storm
 
 Runs STORM — the LLM system that researches a topic and writes a
 Wikipedia-style article with citations — against free-tier LLM APIs, with

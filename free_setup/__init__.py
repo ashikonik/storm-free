@@ -9,7 +9,7 @@ Typical use is through ``run_storm_free.py`` at the project root.
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import logging
 import sys

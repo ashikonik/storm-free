@@ -315,4 +315,15 @@ MIT — see [LICENSE](LICENSE). The upstream STORM project is also MIT licensed.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the rules that apply to
+participation.
+
+To report a security problem, do not open a public issue — see
+[SECURITY.md](SECURITY.md).
+
+## Release notes
+
+[CHANGELOG.md](CHANGELOG.md) records what changed in each release.
+[STATUS.md](STATUS.md) records what has been achieved, what is still open,
+and which providers currently answer.
