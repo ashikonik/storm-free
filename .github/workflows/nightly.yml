@@ -26,18 +26,25 @@ jobs:
       - name: Clone the upstream STORM repository
         run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
 
-      - name: Install the upstream requirements
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the dependencies
         run: |
-          python -m venv venv
-          ./venv/bin/pip install --upgrade pip
-          ./venv/bin/pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+          set -euo pipefail
+          uv venv --python 3.11 venv
+          export UV_HTTP_TIMEOUT=300
+          PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
+          uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
             --index-strategy unsafe-best-match \
             "torch==2.4.1" "torchvision==0.19.1"
-          ./venv/bin/pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+          uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
             --index-strategy unsafe-best-match \
             -r storm/requirements.txt
-          ./venv/bin/pip install "sentence-transformers==3.4.1" "huggingface_hub>=0.23,<1.0"
-          ./venv/bin/pip install ddgs
+          uv pip install "sentence-transformers==3.4.1" "huggingface_hub>=0.23,<1.0"
+          uv pip install ddgs
 
       - name: Check whether the provider secrets are configured
         id: secrets
