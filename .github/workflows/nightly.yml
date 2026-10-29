@@ -24,7 +24,9 @@ jobs:
           python-version: "3.11"
 
       - name: Clone the upstream STORM repository
-        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+        run: |
+          git clone https://github.com/stanford-oval/storm.git storm
+          git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -51,11 +53,17 @@ jobs:
 
       - name: Check whether the provider secrets are configured
         id: secrets
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           # The workflow is useful only with keys.  When they are absent the
           # run says so plainly and exits successfully, rather than failing
           # the build every night for a missing secret.
-          if [ -z "${{ secrets.GROQ_API_KEY }}" ]; then
+          #
+          # The key is read from the environment rather than interpolated
+          # into the script, so a secret containing a quote or a shell
+          # metacharacter cannot alter the command that runs.
+          if [ -z "${GROQ_API_KEY}" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "No provider keys are configured; skipping the probe."
             echo "### Nightly provider probe" >> "$GITHUB_STEP_SUMMARY"
@@ -66,20 +74,35 @@ jobs:
 
       - name: Write the secrets file
         if: steps.secrets.outputs.configured == 'true'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          TOGETHERAI_API_KEY: ${{ secrets.TOGETHERAI_API_KEY }}
         run: |
           # Only non-empty values are written.  A placeholder would shadow a
           # key that happens to be exported in the environment, and the
           # provider would report a confusing authentication error.
+          #
+          # The keys are passed through the environment and written with
+          # printf, so a value containing a quote or a shell metacharacter
+          # is written literally instead of being interpolated into the
+          # command line.
           {
-            echo 'GROQ_API_KEY = "${{ secrets.GROQ_API_KEY }}"'
-            echo 'GEMINI_API_KEY = "${{ secrets.GEMINI_API_KEY }}"'
-            echo 'GOOGLE_API_KEY = "${{ secrets.GOOGLE_API_KEY }}"'
-            echo 'MISTRAL_API_KEY = "${{ secrets.MISTRAL_API_KEY }}"'
-            echo 'OPENROUTER_API_KEY = "${{ secrets.OPENROUTER_API_KEY }}"'
-            echo 'SAMBANOVA_API_KEY = "${{ secrets.SAMBANOVA_API_KEY }}"'
-            echo 'TOGETHER_API_KEY = "${{ secrets.TOGETHER_API_KEY }}"'
-            echo 'TOGETHERAI_API_KEY = "${{ secrets.TOGETHERAI_API_KEY }}"'
+            printf 'GROQ_API_KEY = "%s"\n' "${GROQ_API_KEY}"
+            printf 'GEMINI_API_KEY = "%s"\n' "${GEMINI_API_KEY}"
+            printf 'GOOGLE_API_KEY = "%s"\n' "${GOOGLE_API_KEY}"
+            printf 'MISTRAL_API_KEY = "%s"\n' "${MISTRAL_API_KEY}"
+            printf 'OPENROUTER_API_KEY = "%s"\n' "${OPENROUTER_API_KEY}"
+            printf 'SAMBANOVA_API_KEY = "%s"\n' "${SAMBANOVA_API_KEY}"
+            printf 'TOGETHER_API_KEY = "%s"\n' "${TOGETHER_API_KEY}"
+            printf 'TOGETHERAI_API_KEY = "%s"\n' "${TOGETHERAI_API_KEY}"
           } > secrets.toml
+          chmod 600 secrets.toml
 
       - name: Probe the providers
         if: steps.secrets.outputs.configured == 'true'
@@ -91,12 +114,27 @@ jobs:
       - name: Summarise the result
         if: steps.secrets.outputs.configured == 'true'
         run: |
+          # The repository is public and the job summary is public with it.
+          # A provider's error body can echo back something derived from the
+          # key (OpenRouter, for one, returns a hash of it), so the summary
+          # is reduced to the status line and any key-shaped run of
+          # characters is redacted before it is published.
           {
             echo "### Nightly provider probe"
             echo ""
             echo "Probed on $(date -u '+%Y-%m-%d %H:%M UTC')."
             echo ""
             echo '```'
-            grep -E '^\s*\[(ok|!!|~~|--)\]' doctor.log || echo "(no probe results)"
+            grep -E '^\s*\[(ok|!!|~~|--)\]' doctor.log \
+              | sed -E 's/[A-Za-z0-9_-]{32,}/[redacted]/g' \
+              || echo "(no probe results)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the secrets file
+        if: always() && steps.secrets.outputs.configured == 'true'
+        run: |
+          # The runner workspace is discarded, but remove the file anyway so
+          # it cannot end up in an artifact or a later step's output.
+          rm -f secrets.toml
+          echo "secrets.toml removed from the workspace."

@@ -218,8 +218,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not usable:
         print(
             "\nNo provider responded. Add an API key to secrets.toml "
-            "(see secrets.toml.example). Groq, Mistral, NVIDIA NIM and "
-            "OpenRouter are all free and need no credit card."
+            "(see secrets.toml.example). Groq, Mistral and NVIDIA NIM are "
+            "free and need no credit card."
         )
         return 1
     return 0
@@ -252,8 +252,8 @@ def _quota_hint(exc: BaseException) -> str:
             "allowance.\n"
             "  A full STORM run makes roughly 60-80 model calls; a single "
             "free key allows about 20 per day.\n"
-            "  Add another provider's key to secrets.toml (Groq, Mistral, "
-            "NVIDIA NIM and OpenRouter are all free and need no card), or\n"
+            "  Add another provider's key to secrets.toml (Groq, Mistral "
+            "and NVIDIA NIM are free and need no card), or\n"
             "  run one stage at a time and wait for the quota to reset "
             "(midnight Pacific time for Gemini)."
         )

@@ -42,8 +42,12 @@ jobs:
           python-version: "3.11"
 
       # The upstream clone is gitignored, so CI has to fetch it itself.
+      # The commit is pinned to the same one setup.sh uses, so the tree we
+      # test is the tree a user actually gets.
       - name: Clone the upstream STORM repository
-        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+        run: |
+          git clone https://github.com/stanford-oval/storm.git storm
+          git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -83,7 +87,9 @@ jobs:
           python-version: "3.11"
 
       - name: Clone the upstream STORM repository
-        run: git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+        run: |
+          git clone https://github.com/stanford-oval/storm.git storm
+          git -C storm checkout fb951af7744dab086e34962e9bc6fe878e145f83
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

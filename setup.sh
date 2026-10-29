@@ -29,11 +29,22 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 # --- Upstream repository -----------------------------------------------------
+#
+# The upstream commit is pinned so the tree we test is the tree we ship.
+# Upstream can change its API without warning, and `storm/requirements.txt`
+# is used unmodified, so tracking the default branch would let an upstream
+# change break this project at any moment.  See README.md "Upstream pin" for
+# how to move the pin deliberately.
+
+STORM_REPO="https://github.com/stanford-oval/storm.git"
+STORM_COMMIT="fb951af7744dab086e34962e9bc6fe878e145f83"
 
 if [ ! -d "storm/.git" ]; then
     echo ""
     echo "Cloning stanford-oval/storm..."
-    git clone --depth 1 https://github.com/stanford-oval/storm.git storm
+    git clone "$STORM_REPO" storm
+    git -C storm checkout "$STORM_COMMIT"
+    echo "  Pinned to $STORM_COMMIT."
 else
     echo "  storm/ already cloned."
 fi
@@ -46,7 +57,14 @@ fi
 echo ""
 echo "Setting up the Python 3.11 environment..."
 uv python install 3.11
-uv venv --python 3.11 venv
+# Only create the virtualenv when it is missing.  Re-running the script
+# (for example with INSTALL_UI=1) would otherwise replace the environment
+# and force a full reinstall of the ~2.5GB dependency stack.
+if [ ! -d "venv" ]; then
+    uv venv --python 3.11 venv
+else
+    echo "  venv/ already exists; keeping it."
+fi
 export VIRTUAL_ENV="$PROJECT_DIR/venv"
 
 # The upstream requirements.txt leaves sentence-transformers, transformers and
@@ -98,11 +116,30 @@ else
 fi
 
 # --- Verification ------------------------------------------------------------
+#
+# The import checks must be able to fail the script.  Piping them through
+# `sed` used to swallow the exit status, so a broken installation still
+# printed "=== Setup complete ===".
 
 echo ""
 echo "Verifying the installation..."
-./venv/bin/python -c "import knowledge_storm; print('  knowledge_storm imports OK')" 2>&1 | sed 's/^/  /'
-./venv/bin/python -c "import free_setup; print('  free_setup imports OK')" 2>&1 | sed 's/^/  /'
+
+if ! out=$(./venv/bin/python -c "import knowledge_storm" 2>&1); then
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+    echo ""
+    echo "ERROR: the upstream STORM clone did not import correctly." >&2
+    echo "       Re-run ./setup.sh, or delete venv/ and storm/ and start over." >&2
+    exit 1
+fi
+echo "  knowledge_storm imports OK"
+
+if ! out=$(./venv/bin/python -c "import free_setup" 2>&1); then
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+    echo ""
+    echo "ERROR: free_setup did not import correctly." >&2
+    exit 1
+fi
+echo "  free_setup imports OK"
 
 echo ""
 echo "=== Setup complete ==="
@@ -110,7 +147,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Add API keys to secrets.toml (any one of them is enough to start):"
 echo "       nano secrets.toml"
-echo "     Free, no credit card: Groq, Gemini, Mistral, OpenRouter, NVIDIA NIM."
+echo "     Free, no credit card: Groq, Gemini, Mistral, NVIDIA NIM."
 echo ""
 echo "  2. Check that your providers respond:"
 echo "       ./venv/bin/python run_storm_free.py --doctor"
@@ -119,3 +156,4 @@ echo "  3. Run it:"
 echo "       ./venv/bin/python run_storm_free.py \"your topic here\""
 echo ""
 echo "  Optional: install the Streamlit UI with INSTALL_UI=1 ./setup.sh"
+echo "  (re-running the script keeps the existing venv, so this is quick)."
