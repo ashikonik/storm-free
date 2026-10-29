@@ -15,6 +15,11 @@ are the detail behind the summary here.
 - [x] **Request timeout and retry cap** — `build_lm()` sets
       `timeout=60` and `num_retries=1`. LiteLLM's own default is 6000 s,
       which let one stalled provider hold a run for over an hour.
+- [x] **Token budgets that leave room for a whole section** — upstream's
+      `article_gen` budget of 700 tokens cannot hold a Wikipedia section;
+      the request comes back cut off mid-sentence. Writing stages now get
+      at least 1400 tokens, and reasoning models get four times the
+      nominal budget because they spend part of it thinking first.
 - [x] **CLI** — `--doctor`, `--list-providers`, `--dry-run`, per-stage flags,
       `--provider`, `--model`, `--use-cache`, `--verbose`.
 - [x] **Packaging** — `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `LICENSE`,
@@ -117,6 +122,7 @@ catches it, and it has already paid for itself twice:
 | 2026-10-29 | `groq/openai/gpt-oss-120b` | Answers with an empty body at low token budgets. |
 | 2026-10-29 | `gemini/gemini-2.5-flash` | `404`: *"no longer available to new users"*. Google points new accounts at `gemini-3.8-flash`. |
 | 2026-10-29 | `gemini/gemini-3-flash-preview` | Works, but only with a token budget above ~16: it spends part of the budget reasoning and answers with nothing below that. The probe budget was raised from 16 to 64 tokens. |
+| 2026-10-29 | every model | Upstream's `article_gen` budget of 700 tokens is too small for a whole section — the article came back cut off mid-sentence ("Johannes Gensfleisch zur Laden zum Gutenberg (c."). Writing stages now get at least 1400 tokens, and reasoning models four times that. |
 
 ## Notes
 

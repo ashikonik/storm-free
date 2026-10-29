@@ -17,9 +17,12 @@ from free_setup.config import FreeConfig, StageConfig
 from free_setup.fallback import FallbackLM
 from free_setup.providers import PROVIDERS, get_provider
 from free_setup.runner import (
+    MAX_STAGE_MAX_TOKENS,
+    MIN_WRITING_MAX_TOKENS,
     NUM_RETRIES,
     REQUEST_TIMEOUT_SECONDS,
     RunnerBuildError,
+    budget_for_model,
     build_lm,
     build_lm_configs,
     build_retriever,
@@ -190,3 +193,49 @@ class TestDescribeChains:
 
         for stage in ("conv_simulator", "question_asker", "article_polish"):
             assert stage in summary
+
+
+class TestBudgetForModel:
+    """How many tokens a model is given for a stage.
+
+    The budgets matter more than they look: a request that is cut off
+    mid-sentence produces an article that reads as broken, and STORM
+    writes one section per call.
+    """
+
+    def test_an_ordinary_model_keeps_upstreams_budget(self) -> None:
+        assert budget_for_model("groq/qwen/qwen3.8-27b", "conv_simulator") == 500
+
+    def test_a_writing_stage_gets_enough_room_for_a_section(self) -> None:
+        """Upstream's 700 tokens cannot hold a whole section.
+
+        Measured on ``groq/qwen/qwen3.8-27b``, a 700-token request came
+        back cut off mid-sentence; 1400 came back complete.
+        """
+        budget = budget_for_model("groq/qwen/qwen3.8-27b", "article_gen")
+        assert budget >= MIN_WRITING_MAX_TOKENS
+
+    def test_a_reasoning_model_gets_more_room(self) -> None:
+        """A reasoning model spends part of the budget thinking first."""
+        ordinary = budget_for_model("groq/qwen/qwen3.8-27b", "article_gen")
+        reasoning = budget_for_model("gemini/gemini-3-flash-preview", "article_gen")
+        assert reasoning > ordinary
+
+    def test_every_reasoning_marker_is_recognised(self) -> None:
+        for model in (
+            "gemini/gemini-3-flash-preview",
+            "groq/openai/gpt-oss-120b",
+            "deepseek/deepseek-reasoner",
+        ):
+            assert budget_for_model(model, "article_gen") > budget_for_model(
+                "mistral/ministral-3b-latest", "article_gen"
+            )
+
+    def test_the_budget_never_exceeds_the_ceiling(self) -> None:
+        budget = budget_for_model("gemini/gemini-3-flash-preview", "article_polish")
+        assert budget <= MAX_STAGE_MAX_TOKENS
+
+    def test_the_polish_stage_can_hold_a_whole_article(self) -> None:
+        """Polishing rewrites the entire article in one call."""
+        budget = budget_for_model("groq/qwen/qwen3.8-27b", "article_polish")
+        assert budget >= 4000

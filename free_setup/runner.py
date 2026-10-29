@@ -43,8 +43,74 @@ STAGE_MAX_TOKENS: dict[str, int] = {
     "article_polish": 4000,
 }
 
-# Hard ceiling on how long a single provider may take to answer.
+# Reasoning models need a bigger budget than the nominal one.
 #
+# ``max_tokens`` bounds the *whole* answer, and a reasoning model spends part
+# of it thinking before it writes anything.  Upstream's budgets are sized for
+# ``gpt-4o``, which spends nothing on reasoning, so on a reasoning model the
+# thinking eats the budget and the article is cut off mid-sentence: the
+# article-gen stage asked for 700 tokens and Gemini 3 spent 4176 of them
+# before it produced a single section.
+#
+# Multiplying the budget for the known reasoning models leaves the ordinary
+# models on upstream's exact defaults and gives the reasoning ones room to
+# finish.  The provider's own quota still applies, so this does not make a
+# free tier more expensive -- it makes a run produce a complete article
+# instead of a truncated one.
+REASONING_MODEL_MARKERS: tuple[str, ...] = (
+    "gemini-3",
+    "gpt-oss",
+    "o1",
+    "o3",
+    "o4",
+    "r1",
+    "deepseek-reasoner",
+    "magistral-medium",
+)
+
+# How much to multiply a reasoning model's budget by.
+REASONING_TOKEN_MULTIPLIER = 4
+
+# The smallest budget any writing stage may carry.
+#
+# Upstream's ``article_gen`` budget of 700 tokens is sized for a short
+# GPT-4 answer, but the stage asks the model for a *whole Wikipedia
+# section*, and a section does not fit in 700 tokens: measured on
+# ``groq/qwen/qwen3.8-27b``, a 700-token request came back cut off
+# mid-sentence ("The press utilized a platen that") while the same
+# request at 1400 tokens came back complete.  A truncated section is
+# worse than a slightly larger request, because the article reads as
+# broken.  Writing stages therefore get a floor of 1400 tokens.
+MIN_WRITING_MAX_TOKENS = 1400
+
+# The largest budget any single request may carry, whatever the stage.
+# The article-polish stage rewrites the entire article in one call, so the
+# ceiling has to leave room for a real article.
+MAX_STAGE_MAX_TOKENS = 16_000
+
+# The stages whose output is prose the reader sees, and which therefore
+# must not be cut off part-way through.
+_WRITING_STAGES = frozenset({"article_gen", "article_polish", "outline_gen"})
+
+
+def budget_for_model(model_id: str, stage: str) -> int:
+    """Return the token budget to use for ``model_id`` in ``stage``.
+
+    Ordinary models get upstream's per-stage budget, raised to the writing
+    floor where upstream's own value is too small to hold a section.
+    Reasoning models get that budget multiplied, so the part they spend
+    thinking does not eat into the part that has to hold the answer.
+    """
+    budget = STAGE_MAX_TOKENS.get(stage, 1000)
+    if stage in _WRITING_STAGES:
+        budget = max(budget, MIN_WRITING_MAX_TOKENS)
+    lowered = model_id.lower()
+    if any(marker in lowered for marker in REASONING_MODEL_MARKERS):
+        budget *= REASONING_TOKEN_MULTIPLIER
+    return min(budget, MAX_STAGE_MAX_TOKENS)
+
+
+# Hard ceiling on how long a single provider may take to answer.
 # LiteLLM's own default is 6000 seconds, which is fine for a paid API that is
 # expected to answer but disastrous for a free tier: a provider that stalls
 # holds the pipeline hostage for well over an hour before the fallback chain
@@ -131,7 +197,6 @@ def build_stage_chain(
     message: every provider here is a hosted free-tier API, and there is no
     local model to fall back to.
     """
-    max_tokens = STAGE_MAX_TOKENS.get(stage, 1000)
     lms: list[Any] = []
     skipped: list[str] = []
     rate_limits: dict[str, int] = {}
@@ -149,7 +214,15 @@ def build_stage_chain(
         if not spec.is_available():
             skipped.append(model_id)
             continue
-        lms.append(build_lm(spec, client_model, max_tokens=max_tokens))
+        # The budget is per model, because a reasoning model in the same
+        # chain needs more room than an ordinary one.
+        lms.append(
+            build_lm(
+                spec,
+                client_model,
+                max_tokens=budget_for_model(model_id, stage),
+            )
+        )
         client_id = _client_model_id(spec, client_model)
         if spec.max_per_minute:
             rate_limits[client_id] = spec.max_per_minute
