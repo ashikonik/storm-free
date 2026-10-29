@@ -22,8 +22,18 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CLI = PROJECT_ROOT / "run_storm_free.py"
 
+# Every invocation of the CLI imports torch, through the upstream package.
+# That import takes several seconds on its own, and much longer on a loaded
+# machine: the whole suite runs these in parallel with the other tests, and
+# a timeout that is comfortable for a single test can expire under that
+# load.  The timeout is generous on purpose -- a slow test is annoying, a
+# flaky one is worse.
+CLI_TIMEOUT_SECONDS = 600
 
-def run_cli(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+
+def run_cli(
+    *args: str, timeout: int = CLI_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
     """Run the CLI in a subprocess and return the completed process."""
     return subprocess.run(
         [sys.executable, str(CLI), *args],
@@ -151,7 +161,7 @@ def test_missing_clone_reports_how_to_fix_it(tmp_path: Path) -> None:
         [sys.executable, str(checkout / "run_storm_free.py"), "a topic"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=CLI_TIMEOUT_SECONDS,
         cwd=str(checkout),
     )
 

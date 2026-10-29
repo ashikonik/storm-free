@@ -97,11 +97,14 @@ def test_the_cli_rejects_an_escaping_topic() -> None:
     import subprocess
     import sys
 
+    # The CLI imports torch through the upstream package, which takes
+    # several seconds; the timeout is generous because the whole suite
+    # runs these in parallel with the other tests.
     result = subprocess.run(
         [sys.executable, str(PROJECT_ROOT / "run_storm_free.py"), "..", "--dry-run"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=600,
         cwd=str(PROJECT_ROOT),
     )
 
