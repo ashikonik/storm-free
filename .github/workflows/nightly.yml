@@ -35,6 +35,9 @@ jobs:
         run: |
           set -euo pipefail
           uv venv --python 3.11 venv
+          # ``uv pip install`` needs to be told which environment to use;
+          # without this it refuses to run even though a venv was just made.
+          export VIRTUAL_ENV="$PWD/venv"
           export UV_HTTP_TIMEOUT=300
           PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
           uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \

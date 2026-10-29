@@ -57,6 +57,7 @@ jobs:
           # actually gets.  The upstream requirements leave torch unpinned,
           # which resolves to a combination that cannot import.
           uv venv --python 3.11 venv
+          export VIRTUAL_ENV="$PWD/venv"
           export UV_HTTP_TIMEOUT=300
           PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
           uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
@@ -93,6 +94,9 @@ jobs:
         run: |
           set -euo pipefail
           uv venv --python 3.11 venv
+          # ``uv pip install`` needs to be told which environment to use;
+          # without this it refuses to run even though a venv was just made.
+          export VIRTUAL_ENV="$PWD/venv"
           export UV_HTTP_TIMEOUT=300
           PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
           uv pip install --extra-index-url "$PYTORCH_CPU_INDEX" \
