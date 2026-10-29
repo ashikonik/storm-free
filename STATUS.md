@@ -98,8 +98,9 @@ outside the output directory.
 
 ## Verified end to end
 
-- [x] **Full article run** — produced a complete 32 KB article with 22
-      sections, 67 inline citation markers and 17 distinct cited sources
+- [x] **Full article run** — produced a complete 32,226-byte article: 7
+      top-level sections, 22 subsections, 11 further subsections, 67 inline
+      citation markers and 17 distinct cited sources
       (`outputs/history_of_the_printing_press/`). The run is spread across
       three providers and the article ends on a full sentence.
 - [x] **Fallback in production** — Gemini exhausted its daily quota
