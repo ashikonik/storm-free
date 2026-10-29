@@ -30,13 +30,25 @@ CLI = PROJECT_ROOT / "run_storm_free.py"
 # flaky one is worse.
 CLI_TIMEOUT_SECONDS = 600
 
+# A secrets file that does not exist, so that the developer's own
+# ``secrets.toml`` cannot change what these tests see.  Without this, a
+# test's outcome would depend on which keys happen to be configured on the
+# machine running it -- the suite passed on one machine and failed on CI
+# for exactly that reason.
+NO_SECRETS = str(PROJECT_ROOT / "tests" / "no_such_secrets.toml")
+
 
 def run_cli(
     *args: str, timeout: int = CLI_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str]:
-    """Run the CLI in a subprocess and return the completed process."""
+    """Run the CLI in a subprocess and return the completed process.
+
+    The secrets file is pointed at a path that does not exist, so that the
+    keys configured on the machine running the suite cannot influence the
+    result.
+    """
     return subprocess.run(
-        [sys.executable, str(CLI), *args],
+        [sys.executable, str(CLI), *args, "--secrets", NO_SECRETS],
         capture_output=True,
         text=True,
         timeout=timeout,

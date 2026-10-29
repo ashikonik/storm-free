@@ -188,6 +188,7 @@ def build_stage_chain(
     *,
     only_providers: Sequence[str] | None = None,
     use_cache: bool = False,
+    require_keys: bool = True,
 ) -> FallbackLM:
     """Build the fallback chain for one STORM stage.
 
@@ -196,6 +197,10 @@ def build_stage_chain(
     provider in the chain is usable the build fails with an actionable
     message: every provider here is a hosted free-tier API, and there is no
     local model to fall back to.
+
+    ``require_keys`` false keeps the providers that have no key, which is
+    what a dry run wants: it resolves the plan rather than running it, so
+    the plan should be visible before any key is configured.
     """
     lms: list[Any] = []
     skipped: list[str] = []
@@ -211,7 +216,7 @@ def build_stage_chain(
             continue
         if only_providers is not None and spec.name not in only_providers:
             continue
-        if not spec.is_available():
+        if require_keys and not spec.is_available():
             skipped.append(model_id)
             continue
         # The budget is per model, because a reasoning model in the same
@@ -261,6 +266,7 @@ def build_lm_configs(
     *,
     only_providers: Sequence[str] | None = None,
     use_cache: bool = False,
+    require_keys: bool = True,
 ) -> STORMWikiLMConfigs:
     """Build a ``STORMWikiLMConfigs`` with a fallback chain per stage."""
     lm_configs = STORMWikiLMConfigs()
@@ -270,6 +276,7 @@ def build_lm_configs(
             stage,
             only_providers=only_providers,
             use_cache=use_cache,
+            require_keys=require_keys,
         )
         setattr(lm_configs, STAGE_ATTRS[stage], chain)
     return lm_configs
@@ -337,6 +344,7 @@ def build_runner(
     retriever: str = "duckduckgo",
     only_providers: Sequence[str] | None = None,
     use_cache: bool = False,
+    require_keys: bool = True,
     **overrides: Any,
 ) -> tuple[STORMWikiRunner, STORMWikiLMConfigs]:
     """Assemble a ready-to-run ``STORMWikiRunner``.
@@ -345,6 +353,12 @@ def build_runner(
     names (``max_conv_turn``, ``max_perspective``, ``search_top_k``,
     ``retrieve_top_k``, ``max_thread_num``, ``max_search_queries_per_turn``,
     ``disable_perspective``).
+
+    ``require_keys`` decides whether a provider without a configured API key
+    may be part of a chain.  A real run needs the key, so it defaults to
+    true; a dry run only resolves the *plan*, and refusing to show that plan
+    to someone who has not set a key up yet would make the dry run
+    useless.
     """
     defaults = dict(config.defaults)
     defaults.update(overrides)
@@ -361,7 +375,10 @@ def build_runner(
     )
 
     lm_configs = build_lm_configs(
-        config, only_providers=only_providers, use_cache=use_cache
+        config,
+        only_providers=only_providers,
+        use_cache=use_cache,
+        require_keys=require_keys,
     )
     rm = build_retriever(
         retriever or str(defaults.get("retriever", "duckduckgo")),
