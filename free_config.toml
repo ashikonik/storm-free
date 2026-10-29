@@ -44,24 +44,26 @@ max_thread_num = 2            # concurrent requests; free tiers are rate limited
 #
 # Every model listed here was probed live on 2026-10-29 and returned real
 # text.  Models that failed their probe are deliberately absent -- see
-# STATUS.md for what was removed and why.
+# STATUS.md for what was removed and why.  Google retired
+# gemini-2.5-flash for new accounts, so the Gemini entries below use the
+# model ids that answer today.
 
 [stages.conv_simulator]
-model = "gemini/gemini-2.5-flash-lite"
+model = "gemini/gemini-flash-lite-latest"
 fallbacks = [
     "groq/qwen/qwen3.8-27b",
     "mistral/ministral-3b-latest",
 ]
 
 [stages.question_asker]
-model = "gemini/gemini-2.5-flash"
+model = "gemini/gemini-3-flash-preview"
 fallbacks = [
     "groq/qwen/qwen3.8-27b",
     "mistral/ministral-3b-latest",
 ]
 
 [stages.outline_gen]
-model = "gemini/gemini-2.5-flash-lite"
+model = "gemini/gemini-flash-lite-latest"
 fallbacks = [
     "groq/qwen/qwen3.8-27b",
     "mistral/ministral-3b-latest",
@@ -73,14 +75,14 @@ fallbacks = [
 # token budget of any stage.
 
 [stages.article_gen]
-model = "gemini/gemini-2.5-flash"
+model = "gemini/gemini-3-flash-preview"
 fallbacks = [
     "groq/qwen/qwen3.8-27b",
     "mistral/ministral-3b-latest",
 ]
 
 [stages.article_polish]
-model = "gemini/gemini-2.5-flash-lite"
+model = "gemini/gemini-flash-lite-latest"
 fallbacks = [
     "groq/qwen/qwen3.8-27b",
     "mistral/ministral-3b-latest",
@@ -91,7 +93,7 @@ fallbacks = [
 # provider.  Useful when a provider's free model list changes.
 #
 # [providers.gemini]
-# model = "gemini-2.5-flash-lite"
+# model = "gemini-flash-lite-latest"
 #
 # [providers.groq]
 # model = "openai/gpt-oss-20b"

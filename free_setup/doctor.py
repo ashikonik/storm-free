@@ -126,8 +126,10 @@ def probe_provider(spec: Any, model: str | None = None) -> ProbeResult:
 
     # A token or two is enough to prove the key works, but too few and the
     # model has no room to emit even a single word, which would look like an
-    # empty response rather than a success.
-    probe_tokens = 16
+    # empty response rather than a success.  Reasoning models need more:
+    # Gemini 3 spends part of the budget thinking and answers with nothing
+    # at 16 tokens, so the floor is set above that.
+    probe_tokens = 64
 
     try:
         lm = build_lm(spec, model_id, max_tokens=probe_tokens)

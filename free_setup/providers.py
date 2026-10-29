@@ -171,13 +171,15 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "gemini": _spec(
         "gemini",
         "gemini",
-        "gemini/gemini-2.5-flash",
+        "gemini/gemini-3-flash-preview",
         signup_url="https://aistudio.google.com/apikey",
         free_tier="Free tier, no card (AI Studio). 5 RPM, 20 RPD per model.",
         notes=(
             "Large context; good for the article-writing stages. The daily "
-            "cap is counted per model, so flash-lite adds another 20 "
-            "requests. RPD resets at midnight Pacific time."
+            "cap is counted per model, so a second model adds another 20 "
+            "requests. RPD resets at midnight Pacific time. Google retired "
+            "gemini-2.5-flash for new accounts, so the default is "
+            "gemini-3-flash-preview."
         ),
         max_per_minute=5,
         max_per_day=20,
@@ -379,6 +381,9 @@ FREE_MODELS: dict[str, tuple[str, ...]] = {
         "openai/gpt-oss-20b",
     ),
     "gemini": (
+        "gemini-3-flash-preview",
+        "gemini-flash-lite-latest",
+        "gemini-3.8-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-flash-latest",

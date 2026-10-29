@@ -114,6 +114,50 @@ def test_probe_bypasses_the_disk_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["cache"] is False, "the probe must not read a cached reply"
 
 
+def test_probe_leaves_room_for_a_reasoning_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe budget must exceed what a reasoning model spends thinking.
+
+    Gemini 3 splits the token budget between reasoning and the answer.  At
+    16 tokens it spends the whole budget thinking and returns no content,
+    which the probe would report as an empty -- and therefore broken --
+    provider even though the key is perfectly good.
+    """
+    from free_setup import doctor
+
+    captured: dict[str, Any] = {}
+
+    class FakeLM:
+        cache = False
+        model = "gemini/gemini-3-flash-preview"
+
+        def __call__(self, prompt=None, messages=None, **kwargs):
+            captured.update(kwargs)
+            return ["ok"]
+
+    class FakeSpec:
+        name = "gemini"
+        default_model = "gemini/gemini-3-flash-preview"
+        requires_key = True
+        env_vars = ("GEMINI_API_KEY",)
+
+        def has_key(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "free_setup.runner.build_lm", lambda *a, **k: FakeLM(), raising=True
+    )
+    monkeypatch.setitem(
+        __import__("os").environ, "GEMINI_API_KEY", "dummy-key-for-the-test"
+    )
+
+    result = doctor.probe_provider(FakeSpec())
+
+    assert result.status is Status.OK
+    assert captured["max_tokens"] >= 64
+
+
 def test_probe_reports_a_missing_key_without_calling_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

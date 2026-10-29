@@ -39,6 +39,8 @@ are the detail behind the summary here.
       against the configured providers and publishes the result to the job
       summary. It skips cleanly when no provider keys are set.
 - [x] **Published** — `github.com/ashikonik/storm-free`, public.
+- [x] **CI green** — run `40852466979`: all four jobs passed (lint, test,
+      mypy, secret-scan).
 
 ## Verified end to end
 
@@ -55,12 +57,14 @@ are the detail behind the summary here.
 
 ## Ongoing
 
-- [ ] **Nightly probe secrets** — the workflow needs repository secrets
-      (`GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, ...) configured
-      to be useful. Without them it reports "Skipped: no provider API keys
-      are configured" and exits successfully.
-- [ ] **More provider keys** — 16 of the 22 registered providers still have
-      no key, so only the six configured ones are exercised in practice.
+- [ ] **More provider keys** — 19 of the 22 registered providers still have
+      no key, so only groq, gemini and mistral are exercised in practice.
+      The three that are configured but broken are listed under *Blocked*.
+- [ ] **Nightly probe result** — the first probe with keys is still running;
+      check the job summary for the current state of each provider.
+- [ ] **Re-verify the full run** — the article pipeline was last verified end
+      to end with the old Gemini model ids. The chains have been updated to
+      the ids that answer today, but a fresh full run is still owed.
 
 ## Blocked
 
@@ -79,9 +83,9 @@ free tier's daily allowance is spent; it resets on a daily cycle.
 
 | Provider | Status | Detail |
 |---|---|---|
-| groq | OK | `qwen/qwen3.8-27b` answers in ~390 ms. The `gpt-oss-*` models answer with an **empty body** at low token budgets, so they are not in any stage chain. |
-| mistral | OK | `ministral-3b-latest` answers in ~940 ms. |
-| gemini | Quota | Both models work; the daily allowance (20 requests/day/model) is spent. A run needs ~60–80 calls, so a run spreads across providers. |
+| groq | OK | `qwen/qwen3.8-27b` answers in ~300–1000 ms. The `gpt-oss-*` models answer with an **empty body** at low token budgets, so they are not in any stage chain. |
+| mistral | OK | `ministral-3b-latest` answers in ~700–1100 ms. |
+| gemini | OK | `gemini-3-flash-preview` and `gemini-flash-lite-latest` answer in ~1.2–1.6 s. The daily allowance is 20 requests/day/model. |
 | together_ai | Broken | Key rejected as invalid. |
 | openrouter | Broken | Key has a $0.00 total limit that does not reset. |
 | sambanova | Broken | Published model ids return 403; others report high demand. |
@@ -95,12 +99,24 @@ against LiteLLM, but no key is configured for them yet.
 | Model | Why |
 |---|---|
 | `groq/openai/gpt-oss-120b`, `-20b` | Return an empty body at low token budgets — they would silently produce empty article sections. |
+| `gemini/gemini-2.5-flash`, `-lite` | Google retired these for new accounts; the API answers `404 "no longer available to new users"`. |
 | `sambanova/*` | 403 on the published ids. |
 | `together_ai/*` | The key is rejected. |
 | `openrouter/*` | The key's limit is exhausted. |
 
 They stay in `FREE_MODELS` so `--list-providers` shows them, and they will
 work again if the underlying problem is fixed.
+
+## Free-tier rot
+
+Free tiers retire models without warning.  The nightly probe is what
+catches it, and it has already paid for itself twice:
+
+| Date | Model | What happened |
+|---|---|---|
+| 2026-10-29 | `groq/openai/gpt-oss-120b` | Answers with an empty body at low token budgets. |
+| 2026-10-29 | `gemini/gemini-2.5-flash` | `404`: *"no longer available to new users"*. Google points new accounts at `gemini-3.8-flash`. |
+| 2026-10-29 | `gemini/gemini-3-flash-preview` | Works, but only with a token budget above ~16: it spends part of the budget reasoning and answers with nothing below that. The probe budget was raised from 16 to 64 tokens. |
 
 ## Notes
 

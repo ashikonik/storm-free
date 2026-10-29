@@ -12,11 +12,11 @@ Example::
     max_conv_turn = 2
 
     [stages.article_gen]
-    model = "gemini/gemini-2.5-flash"
-    fallbacks = ["groq/openai/gpt-oss-120b"]
+    model = "gemini/gemini-3-flash-preview"
+    fallbacks = ["groq/qwen/qwen3.8-27b"]
 
     [providers.groq]
-    model = "openai/gpt-oss-20b"
+    model = "qwen/qwen3.8-27b"
 """
 
 from __future__ import annotations

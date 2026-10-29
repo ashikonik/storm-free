@@ -118,9 +118,9 @@ and what is still open.
 
 ```toml
 [stages.article_gen]
-model = "gemini/gemini-2.5-flash"
+model = "gemini/gemini-3-flash-preview"
 fallbacks = [
-    "groq/openai/gpt-oss-120b",
+    "groq/qwen/qwen3.8-27b",
     "nvidia_nim/meta-llama/llama-3.3-70b-instruct",
     "mistral/ministral-3b-latest",
 ]
